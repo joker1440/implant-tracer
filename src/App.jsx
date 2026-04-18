@@ -105,6 +105,11 @@ function photoTitle(photo) {
   return photo.photo_label || photo.caption || "Clinical Photo";
 }
 
+function photoSortDate(photo, visitsById) {
+  const visit = visitsById[photo.visit_id];
+  return photo.taken_at || visit?.visited_on || photo.created_at || "";
+}
+
 function cloneVisitPhotos(photos) {
   return photos.map((photo) => ({
     ...photo,
@@ -177,8 +182,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [procedureFilter, setProcedureFilter] = useState("");
   const [casePhotoCompare, setCasePhotoCompare] = useState({
-    before: "",
-    after: "",
+    selectedIds: [],
     open: false
   });
   const [photoPreview, setPhotoPreview] = useState({
@@ -698,12 +702,15 @@ export default function App() {
     return matchesKeyword && matchesProcedure;
   });
 
-  const caseBeforePhoto = selectedCasePhotos.find(
-    (photo) => photo.id === casePhotoCompare.before
-  );
-  const caseAfterPhoto = selectedCasePhotos.find(
-    (photo) => photo.id === casePhotoCompare.after
-  );
+  const selectedComparePhotos = casePhotoCompare.selectedIds
+    .map((photoId) => selectedCasePhotos.find((photo) => photo.id === photoId))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftDate = photoSortDate(left, visitsById);
+      const rightDate = photoSortDate(right, visitsById);
+
+      return leftDate.localeCompare(rightDate) || String(left.id).localeCompare(String(right.id));
+    });
   const previewPhoto = selectedCasePhotos.find((photo) => photo.id === photoPreview.photoId);
   const previewPhotoVisit = previewPhoto ? visitsById[previewPhoto.visit_id] : null;
   const previewPhotoProcedures = previewPhotoVisit ? proceduresByVisitId[previewPhotoVisit.id] || [] : [];
@@ -720,21 +727,19 @@ export default function App() {
     const selectedIds = new Set(selectedCasePhotos.map((photo) => photo.id));
 
     setCasePhotoCompare((current) => {
-      const nextBefore = selectedIds.has(current.before) ? current.before : "";
-      const nextAfter = selectedIds.has(current.after) ? current.after : "";
-      const nextOpen = current.open && nextBefore && nextAfter;
+      const nextSelectedIds = current.selectedIds.filter((photoId) => selectedIds.has(photoId));
+      const nextOpen = current.open && nextSelectedIds.length >= 2;
 
       if (
-        current.before === nextBefore &&
-        current.after === nextAfter &&
+        current.selectedIds.length === nextSelectedIds.length &&
+        current.selectedIds.every((photoId, index) => photoId === nextSelectedIds[index]) &&
         current.open === nextOpen
       ) {
         return current;
       }
 
       return {
-        before: nextBefore,
-        after: nextAfter,
+        selectedIds: nextSelectedIds,
         open: Boolean(nextOpen)
       };
     });
@@ -976,6 +981,21 @@ export default function App() {
     });
 
     closeDraftPhotoEditor();
+  }
+
+  function toggleCaseComparePhoto(photoId) {
+    setCasePhotoCompare((current) => {
+      const alreadySelected = current.selectedIds.includes(photoId);
+      const nextSelectedIds = alreadySelected
+        ? current.selectedIds.filter((id) => id !== photoId)
+        : [...current.selectedIds, photoId];
+
+      return {
+        ...current,
+        selectedIds: nextSelectedIds,
+        open: current.open && nextSelectedIds.length >= 2
+      };
+    });
   }
 
   async function handleSignIn(event) {
@@ -1500,28 +1520,26 @@ export default function App() {
           visitDraft.next_plan_procedure_type &&
           visitDraft.next_plan_planned_date
         ) {
-          const currentCaseSteps = (planStepsByCaseId[visitDraft.case_id] || []).filter(
-            (step) =>
-              step.id !== visitDraft.plan_step_id && step.id !== visitDraft.next_plan_step_id
+          const caseSteps = (planStepsByCaseId[visitDraft.case_id] || []).filter(
+            (step) => step.id !== visitDraft.plan_step_id
           );
-          const provisionalNextStep = {
-            id: visitDraft.next_plan_step_id || `next-${Date.now()}`,
-            case_id: visitDraft.case_id,
-            planned_date: visitDraft.next_plan_planned_date,
-            procedure_type: visitDraft.next_plan_procedure_type,
-            status: "pending",
-            note: visitDraft.next_plan_note || "",
-            step_order: 0
-          };
-          const orderedSteps = currentCaseSteps
-            .concat(provisionalNextStep)
+          const pendingCaseSteps = caseSteps
+            .filter((step) => step.status === "pending")
             .sort(comparePlanStepsByTimeline);
+          const explicitNextStep = visitDraft.next_plan_step_id
+            ? pendingCaseSteps.find((step) => step.id === visitDraft.next_plan_step_id) || null
+            : null;
+          const matchedPendingStep =
+            pendingCaseSteps.find(
+              (step) =>
+                step.procedure_type === visitDraft.next_plan_procedure_type &&
+                step.id !== explicitNextStep?.id
+            ) || null;
+          const targetNextStep = explicitNextStep || matchedPendingStep;
           const nextPlanPayload = {
             owner_user_id: session.user.id,
             case_id: visitDraft.case_id,
-            step_order: visitDraft.next_plan_step_id
-              ? provisionalNextStep.step_order || getNextPlanStepOrder(currentCaseSteps)
-              : getNextPlanStepOrder(currentCaseSteps),
+            step_order: targetNextStep?.step_order || getNextPlanStepOrder(caseSteps),
             title:
               PROCEDURE_LABELS[visitDraft.next_plan_procedure_type] ||
               visitDraft.next_plan_procedure_type,
@@ -1531,11 +1549,11 @@ export default function App() {
             note: normalizeText(visitDraft.next_plan_note)
           };
 
-          const nextPlanRequest = visitDraft.next_plan_step_id
+          const nextPlanRequest = targetNextStep
             ? supabase
                 .from("case_plan_steps")
                 .update(nextPlanPayload)
-                .eq("id", visitDraft.next_plan_step_id)
+                .eq("id", targetNextStep.id)
                 .select()
                 .single()
             : supabase.from("case_plan_steps").insert(nextPlanPayload).select().single();
@@ -1872,7 +1890,12 @@ export default function App() {
                         </div>
                         <div className="agenda-item__body">
                           <div className="agenda-item__row">
-                            <strong>{item.patient.full_name}</strong>
+                            <div className="agenda-item__person">
+                              <strong>{item.patient.full_name}</strong>
+                              {item.patient.clinic_name ? (
+                                <span className="muted-text">{item.patient.clinic_name}</span>
+                              ) : null}
+                            </div>
                             <span className="tag">{formatCaseToothLabel(item.caseEntry)}</span>
                           </div>
                           <div className="agenda-item__row">
@@ -2221,48 +2244,46 @@ export default function App() {
                               type="button"
                               onClick={() => openPlanModal("create")}
                             >
-                              進階新增
+                              新增計畫
                             </button>
                           </div>
 
                           <div className="timeline-list">
                             {selectedCasePlanSteps.map((step) => (
-                              <article key={step.id} className="timeline-item">
-                                <div className="timeline-item__main">
-                                  <div className="timeline-item__row">
-                                    <strong>
-                                      {getPlanStepLabel(step)}
-                                    </strong>
-                                    <span
-                                      className={cx(
-                                        "pill",
-                                        step.status === "completed" && "pill--green",
-                                        step.status === "pending" &&
-                                          step.planned_date &&
-                                          daysFromToday(step.planned_date) < 0 &&
-                                          "pill--danger"
-                                      )}
-                                    >
-                                      {PLAN_STATUS_LABELS[step.status]}
-                                    </span>
+                              <article key={step.id} className="visit-card timeline-item">
+                                <div className="visit-card__header timeline-item__header">
+                                  <div className="timeline-item__main">
+                                    <div className="timeline-item__headline">
+                                      <strong>{getPlanStepLabel(step)}</strong>
+                                      <span className="timeline-item__date">
+                                        {step.planned_date ? formatDate(step.planned_date) : "未排日期"}
+                                      </span>
+                                    </div>
+                                    <div className="chip-row">
+                                      <span
+                                        className={cx(
+                                          "pill",
+                                          step.status === "completed" && "pill--green",
+                                          step.status === "pending" &&
+                                            step.planned_date &&
+                                            daysFromToday(step.planned_date) < 0 &&
+                                            "pill--danger"
+                                        )}
+                                      >
+                                        {PLAN_STATUS_LABELS[step.status]}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="timeline-item__row">
-                                    <span>{PROCEDURE_LABELS[step.procedure_type]}</span>
-                                    <span>{step.planned_date ? formatDate(step.planned_date) : "未排日期"}</span>
-                                  </div>
-                                  {step.note ? <p className="muted-text">{step.note}</p> : null}
-                                </div>
-                                <div className="timeline-item__actions">
-                                  {step.status === "pending" ? (
-                                    <button
-                                      className="primary-button"
-                                      type="button"
-                                      onClick={() => openVisitModal("create", selectedCase.id, null, step)}
-                                    >
-                                      完成此步驟
-                                    </button>
-                                  ) : null}
-                                  <div className="timeline-item__secondary-actions">
+                                  <div className="inline-actions timeline-item__actions">
+                                    {step.status === "pending" ? (
+                                      <button
+                                        className="primary-button"
+                                        type="button"
+                                        onClick={() => openVisitModal("create", selectedCase.id, null, step)}
+                                      >
+                                        完成此步驟
+                                      </button>
+                                    ) : null}
                                     <button
                                       className="ghost-button"
                                       type="button"
@@ -2279,6 +2300,7 @@ export default function App() {
                                     </button>
                                   </div>
                                 </div>
+                                {step.note ? <p className="muted-text">{step.note}</p> : null}
                               </article>
                             ))}
                             {!selectedCasePlanSteps.length ? (
@@ -2361,20 +2383,19 @@ export default function App() {
                       </section>
 
                       <section className="panel">
-                        <div className="panel-heading">
-                          <div>
-                            <p className="eyebrow">Gallery</p>
-                            <h3>這個 Case（{selectedCaseToothLabel}）的照片總覽</h3>
-                          </div>
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Gallery</p>
+                              <h3>這個 Case（{selectedCaseToothLabel}）的照片總覽</h3>
+                            </div>
                           <div className="inline-actions">
                             <div className="compare-status">
-                              <span>Before: {photoTitle(caseBeforePhoto)}</span>
-                              <span>After: {photoTitle(caseAfterPhoto)}</span>
+                              <span>{`已選 ${selectedComparePhotos.length} 張照片`}</span>
                             </div>
                             <button
                               className="secondary-button"
                               type="button"
-                              disabled={!caseBeforePhoto || !caseAfterPhoto}
+                              disabled={selectedComparePhotos.length < 2}
                               onClick={() =>
                                 setCasePhotoCompare((current) => ({
                                   ...current,
@@ -2382,7 +2403,7 @@ export default function App() {
                                 }))
                               }
                             >
-                              查看 Before / After
+                              查看比較
                             </button>
                           </div>
                         </div>
@@ -2416,62 +2437,84 @@ export default function App() {
                                 </div>
                                 <div className="photo-grid">
                                   {group.photos.map((photo) => (
-                                    <article className="photo-card" key={photo.id}>
+                                    <article
+                                      className={cx(
+                                        "photo-card",
+                                        casePhotoCompare.selectedIds.includes(photo.id) &&
+                                          "photo-card--selected"
+                                      )}
+                                      key={photo.id}
+                                      role="button"
+                                      tabIndex={0}
+                                      aria-pressed={casePhotoCompare.selectedIds.includes(photo.id)}
+                                      onClick={() => toggleCaseComparePhoto(photo.id)}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          toggleCaseComparePhoto(photo.id);
+                                        }
+                                      }}
+                                    >
                                       {photo.signed_url ? (
-                                        <button
-                                          className="photo-preview-trigger"
-                                          type="button"
-                                          onClick={() =>
-                                            setPhotoPreview({
-                                              open: true,
-                                              photoId: photo.id
-                                            })
-                                          }
-                                        >
+                                        <div className="photo-preview-trigger">
                                           <img src={photo.signed_url} alt={photo.file_name} />
-                                        </button>
+                                        </div>
                                       ) : (
                                         <div className="photo-placeholder">No preview</div>
                                       )}
                                       <div className="photo-card__body">
-                                        {photo.caption ? <p>{photo.caption}</p> : null}
+                                        <div className="photo-card__meta">
+                                          <strong>
+                                            {visitsById[photo.visit_id]?.visited_on
+                                              ? formatDate(visitsById[photo.visit_id].visited_on)
+                                              : "未指定日期"}
+                                          </strong>
+                                          <div className="chip-row">
+                                            {(proceduresByVisitId[photo.visit_id] || []).map((procedure) => (
+                                              <span
+                                                className={cx(
+                                                  "pill",
+                                                  getProcedureToneClass(procedure.procedure_type)
+                                                )}
+                                                key={procedure.id}
+                                              >
+                                                {PROCEDURE_LABELS[procedure.procedure_type]}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
                                         <div className="photo-card__actions">
-                                          <button
+                                          <span
                                             className={cx(
-                                              "photo-action-button",
-                                              casePhotoCompare.before === photo.id &&
-                                                "is-selected-before"
+                                              "photo-selection-chip",
+                                              casePhotoCompare.selectedIds.includes(photo.id) &&
+                                                "photo-selection-chip--selected"
                                             )}
-                                            type="button"
-                                            onClick={() =>
-                                              setCasePhotoCompare((current) => ({
-                                                ...current,
-                                                before: photo.id
-                                              }))
-                                            }
                                           >
-                                            Before
-                                          </button>
+                                            {casePhotoCompare.selectedIds.includes(photo.id)
+                                              ? "已選取比較"
+                                              : "點卡片選取"}
+                                          </span>
                                           <button
-                                            className={cx(
-                                              "photo-action-button",
-                                              casePhotoCompare.after === photo.id &&
-                                                "is-selected-after"
-                                            )}
+                                            className="photo-action-button"
                                             type="button"
-                                            onClick={() =>
-                                              setCasePhotoCompare((current) => ({
-                                                ...current,
-                                                after: photo.id
-                                              }))
-                                            }
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setPhotoPreview({
+                                                open: true,
+                                                photoId: photo.id
+                                              });
+                                            }}
                                           >
-                                            After
+                                            查看大圖
                                           </button>
                                           <button
                                             className="photo-action-button photo-action-button--delete"
                                             type="button"
-                                            onClick={() => handleDeletePhoto(photo)}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleDeletePhoto(photo);
+                                            }}
                                           >
                                             刪除
                                           </button>
@@ -3632,8 +3675,8 @@ export default function App() {
 
       <Modal
         open={casePhotoCompare.open}
-        title="Before / After"
-        subtitle={`比較 ${selectedCaseToothHeading} 在不同回診或不同階段的照片。`}
+        title="照片比較"
+        subtitle={`依時間順序比較 ${selectedCaseToothHeading} 的多張照片。`}
         onClose={() =>
           setCasePhotoCompare((current) => ({
             ...current,
@@ -3642,57 +3685,42 @@ export default function App() {
         }
         width="xwide"
       >
-        {caseBeforePhoto?.signed_url && caseAfterPhoto?.signed_url ? (
+        {selectedComparePhotos.length >= 2 ? (
           <div className="compare-view">
-            <div className="compare-view__grid">
-              {[
-                { label: "Before", photo: caseBeforePhoto },
-                { label: "After", photo: caseAfterPhoto }
-              ].map(({ label, photo }) => (
-                <article className="compare-view__panel" key={label}>
-                  <div className="compare-view__image-frame">
-                    <img
-                      className="compare-view__image"
-                      src={photo.signed_url}
-                      alt={photoTitle(photo)}
-                    />
-                  </div>
-                  <span className="compare-view__badge">{label}</span>
-                </article>
-              ))}
-            </div>
-
-            <div className="compare-view__meta-grid">
-              {[
-                { label: "Before", photo: caseBeforePhoto },
-                { label: "After", photo: caseAfterPhoto }
-              ].map(({ label, photo }) => {
+            <div className="compare-view__multi-grid">
+              {selectedComparePhotos.map((photo) => {
                 const visit = visitsById[photo.visit_id];
                 const procedures = visit ? proceduresByVisitId[visit.id] || [] : [];
 
                 return (
-                  <article className="compare-view__meta-card" key={label}>
-                    <strong>{label}</strong>
-                    <span>{photoTitle(photo)}</span>
-                    <span>{visit?.visited_on ? formatDate(visit.visited_on) : "未指定回診"}</span>
-                    <div className="chip-row">
-                      {procedures.map((procedure) => (
-                        <span
-                          className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
-                          key={procedure.id}
-                        >
-                          {PROCEDURE_LABELS[procedure.procedure_type]}
-                        </span>
-                      ))}
+                  <article className="compare-view__panel compare-view__panel--multi" key={photo.id}>
+                    <div className="compare-view__image-frame">
+                      <img
+                        className="compare-view__image"
+                        src={photo.signed_url}
+                        alt={photoTitle(photo)}
+                      />
                     </div>
-                    {photo.caption ? <p>{photo.caption}</p> : null}
+                    <div className="compare-view__panel-meta">
+                      <strong>{visit?.visited_on ? formatDate(visit.visited_on) : "未指定日期"}</strong>
+                      <div className="chip-row">
+                        {procedures.map((procedure) => (
+                          <span
+                            className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
+                            key={procedure.id}
+                          >
+                            {PROCEDURE_LABELS[procedure.procedure_type]}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </article>
                 );
               })}
             </div>
           </div>
         ) : (
-          <div className="empty-state">請先選擇 Before 與 After 照片。</div>
+          <div className="empty-state">請先至少選擇 2 張照片。</div>
         )}
       </Modal>
 

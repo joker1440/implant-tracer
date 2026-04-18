@@ -32,10 +32,10 @@ export const PROCEDURE_OPTIONS = [
   { value: "arp", label: "ARP" },
   { value: "gbr", label: "GBR" },
   { value: "sinus_lift", label: "Sinus Lift" },
-  { value: "implant_placement", label: "Implant Placement" },
+  { value: "implant_placement", label: "植牙" },
   { value: "fgg_ctg", label: "FGG / CTG" },
-  { value: "stage_2_healing_abutment", label: "Stage 2 / Healing Abutment" },
-  { value: "impression_scan", label: "Impression / Scan" },
+  { value: "stage_2_healing_abutment", label: "接healing" },
+  { value: "impression_scan", label: "口掃" },
   { value: "provisional", label: "Provisional" },
   { value: "delivery", label: "Delivery" },
   { value: "follow_up", label: "Follow-up" },
@@ -145,11 +145,11 @@ export const TEMPLATE_LABELS = {
 };
 
 export const TEMPLATE_FLOW_PREVIEWS = {
-  arp_to_implant: "Extraction -> ARP -> Implant -> FGG/CTG -> Stage -> Impression -> Final",
-  gbr_to_implant: "Extraction -> GBR -> Implant -> FGG/CTG -> Stage -> Impression -> Final",
-  iip: "Extraction -> Implant -> FGG/CTG -> Stage -> Impression -> Final",
-  healed_ridge: "Implant -> FGG/CTG -> Stage -> Impression -> Final",
-  sinus_lift_to_implant: "Sinus -> Implant -> FGG/CTG -> Stage -> Impression -> Final"
+  arp_to_implant: "Extraction -> ARP -> Implant -> FGG/CTG -> 接healing -> Impression -> Final",
+  gbr_to_implant: "Extraction -> GBR -> Implant -> FGG/CTG -> 接healing -> Impression -> Final",
+  iip: "Extraction -> Implant -> FGG/CTG -> 接healing -> Impression -> Final",
+  healed_ridge: "Implant -> FGG/CTG -> 接healing -> Impression -> Final",
+  sinus_lift_to_implant: "Sinus -> Implant -> FGG/CTG -> 接healing -> Impression -> Final"
 };
 
 export const PROCEDURE_LABELS = Object.fromEntries(
