@@ -1194,6 +1194,10 @@ img {
   gap: 10px;
 }
 
+.pill-select--dense {
+  gap: 8px;
+}
+
 .pill-option {
   appearance: none;
   padding: 10px 14px;
@@ -1288,6 +1292,11 @@ img {
   color: #685b52;
 }
 
+.pill-select--dense .pill-option {
+  padding: 9px 12px;
+  font-size: 0.88rem;
+}
+
 .field span {
   font-size: 0.92rem;
   color: var(--muted);
@@ -1318,6 +1327,47 @@ img {
 
 .field--full {
   grid-column: 1 / -1;
+}
+
+.implant-configurator {
+  display: grid;
+  gap: 18px;
+}
+
+.implant-configurator__hint,
+.implant-healing-panel {
+  border-radius: 18px;
+  border: 1px solid rgba(126, 155, 139, 0.16);
+  background: rgba(243, 248, 245, 0.8);
+}
+
+.implant-configurator__hint {
+  padding: 14px 16px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.implant-healing-panel {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.implant-healing-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.implant-healing-panel__header strong {
+  font-size: 0.98rem;
+}
+
+.implant-healing-panel__header span {
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 .readonly-field {
@@ -1671,6 +1721,20 @@ img {
   .setup-card {
     padding: 16px;
     border-radius: 20px;
+  }
+
+  .implant-healing-panel {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .pill-select--dense {
+    gap: 6px;
+  }
+
+  .pill-select--dense .pill-option {
+    padding: 8px 11px;
+    font-size: 0.84rem;
   }
 
   .form-grid,

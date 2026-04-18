@@ -8,6 +8,12 @@ import {
   BONE_GRAFT_OPTIONS,
   CASE_STATUS_LABELS,
   CASE_STATUS_OPTIONS,
+  HEALING_SIZE_OPTIONS,
+  HEALING_TOGGLE_OPTIONS,
+  IMPLANT_BRAND_OPTIONS,
+  IMPLANT_DIAMETER_OPTIONS,
+  IMPLANT_LENGTH_OPTIONS,
+  IMPLANT_MODEL_OPTIONS_BY_BRAND,
   MEMBRANE_OPTIONS,
   NAV_ITEMS,
   PHOTO_LABEL_OPTIONS,
@@ -522,6 +528,27 @@ export default function App() {
         return "pill--stone";
     }
   };
+  const getImplantBrandToneClass = (brand) => {
+    switch (brand) {
+      case "osstem":
+        return "pill--sand";
+      case "astra":
+        return "pill--mint";
+      case "iti":
+        return "pill--mist";
+      default:
+        return "pill--stone";
+    }
+  };
+  const getHealingToggleToneClass = (value) => {
+    switch (value) {
+      case "yes":
+        return "pill--sage";
+      case "no":
+      default:
+        return "pill--stone";
+    }
+  };
   const getPhotoLabelToneClass = (label) => {
     switch (label) {
       case "pre-op":
@@ -806,7 +833,11 @@ export default function App() {
           bone_graft_materials: procedure.bone_graft_materials || [],
           membrane_type: procedure.membrane_type || "",
           membrane_note: procedure.membrane_note || "",
-          sinus_lift_approach: procedure.sinus_lift_approach || ""
+          sinus_lift_approach: procedure.sinus_lift_approach || "",
+          extra_data: {
+            healing_used: Boolean(procedure.extra_data?.healing_used),
+            healing_size: procedure.extra_data?.healing_size || ""
+          }
         }))
       : [createEmptyProcedure(planStep?.procedure_type || "consultation")];
     const referenceStepId = visit?.plan_step_id || planStep?.id || "";
@@ -854,6 +885,18 @@ export default function App() {
       index: -1
     });
     setVisitModal((current) => ({ ...current, open: false }));
+  }
+
+  function updateVisitProcedureAt(index, updater) {
+    setVisitModal((current) => ({
+      ...current,
+      values: {
+        ...current.values,
+        procedures: current.values.procedures.map((item, innerIndex) =>
+          innerIndex === index ? updater(item) : item
+        )
+      }
+    }));
   }
 
   function openDraftPhotoEditor(kind, index) {
@@ -3046,8 +3089,13 @@ export default function App() {
             </div>
 
             <div className="procedure-stack">
-              {visitModal.values.procedures.map((procedure, index) => (
-                <article className="procedure-card" key={procedure.id || index}>
+              {visitModal.values.procedures.map((procedure, index) => {
+                const implantModelOptions =
+                  IMPLANT_MODEL_OPTIONS_BY_BRAND[procedure.implant_brand || ""] || [];
+                const healingSelection = procedure.extra_data?.healing_used ? "yes" : "no";
+
+                return (
+                  <article className="procedure-card" key={procedure.id || index}>
                   <div className="section-title-row">
                     <strong>治療內容 #{index + 1}</strong>
                     {visitModal.values.procedures.length > 1 ? (
@@ -3123,93 +3171,125 @@ export default function App() {
                   </div>
 
                   {procedure.procedure_type === "implant_placement" ? (
-                    <div className="toolbar-grid">
-                      <label className="field">
+                    <div className="implant-configurator">
+                      <div className="field field--full">
                         <span>植體廠牌</span>
-                        <input
+                        <PillSelect
                           value={procedure.implant_brand || ""}
-                          onChange={(event) =>
-                            setVisitModal((current) => ({
-                              ...current,
-                              values: {
-                                ...current.values,
-                                procedures: current.values.procedures.map((item, innerIndex) =>
-                                  innerIndex === index
-                                    ? { ...item, implant_brand: event.target.value }
-                                    : item
-                                )
-                              }
-                            }))
+                          options={IMPLANT_BRAND_OPTIONS}
+                          onChange={(nextValue) =>
+                            updateVisitProcedureAt(index, (item) => {
+                              const nextModelOptions =
+                                IMPLANT_MODEL_OPTIONS_BY_BRAND[nextValue] || [];
+                              const nextModel =
+                                nextModelOptions.find((option) => option.value === item.implant_model)
+                                  ?.value || "";
+
+                              return {
+                                ...item,
+                                implant_brand: nextValue,
+                                implant_model: nextModel
+                              };
+                            })
                           }
+                          getToneClass={getImplantBrandToneClass}
                         />
-                      </label>
-                      <label className="field">
+                      </div>
+
+                      <div className="field field--full">
                         <span>植體型號</span>
-                        <input
-                          value={procedure.implant_model || ""}
-                          onChange={(event) =>
-                            setVisitModal((current) => ({
-                              ...current,
-                              values: {
-                                ...current.values,
-                                procedures: current.values.procedures.map((item, innerIndex) =>
-                                  innerIndex === index
-                                    ? { ...item, implant_model: event.target.value }
-                                    : item
-                                )
-                              }
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
+                        {implantModelOptions.length ? (
+                          <PillSelect
+                            value={procedure.implant_model || ""}
+                            options={implantModelOptions}
+                            onChange={(nextValue) =>
+                              updateVisitProcedureAt(index, (item) => ({
+                                ...item,
+                                implant_model: nextValue
+                              }))
+                            }
+                            getToneClass={() => getImplantBrandToneClass(procedure.implant_brand)}
+                          />
+                        ) : (
+                          <div className="implant-configurator__hint">
+                            先選植體廠牌，再選對應型號。
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="field field--full">
                         <span>直徑 (mm)</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={procedure.implant_diameter_mm || ""}
-                          onChange={(event) =>
-                            setVisitModal((current) => ({
-                              ...current,
-                              values: {
-                                ...current.values,
-                                procedures: current.values.procedures.map((item, innerIndex) =>
-                                  innerIndex === index
-                                    ? {
-                                        ...item,
-                                        implant_diameter_mm: event.target.value
-                                      }
-                                    : item
-                                )
-                              }
+                        <PillSelect
+                          value={String(procedure.implant_diameter_mm || "")}
+                          options={IMPLANT_DIAMETER_OPTIONS}
+                          onChange={(nextValue) =>
+                            updateVisitProcedureAt(index, (item) => ({
+                              ...item,
+                              implant_diameter_mm: nextValue
                             }))
                           }
+                          getToneClass={() => "pill--mist"}
                         />
-                      </label>
-                      <label className="field">
+                      </div>
+
+                      <div className="field field--full">
                         <span>長度 (mm)</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={procedure.implant_length_mm || ""}
-                          onChange={(event) =>
-                            setVisitModal((current) => ({
-                              ...current,
-                              values: {
-                                ...current.values,
-                                procedures: current.values.procedures.map((item, innerIndex) =>
-                                  innerIndex === index
-                                    ? {
-                                        ...item,
-                                        implant_length_mm: event.target.value
-                                      }
-                                    : item
-                                )
+                        <PillSelect
+                          value={String(procedure.implant_length_mm || "")}
+                          options={IMPLANT_LENGTH_OPTIONS}
+                          onChange={(nextValue) =>
+                            updateVisitProcedureAt(index, (item) => ({
+                              ...item,
+                              implant_length_mm: nextValue
+                            }))
+                          }
+                          getToneClass={() => "pill--sand"}
+                        />
+                      </div>
+
+                      <div className="field field--full">
+                        <span>使用 Healing</span>
+                        <PillSelect
+                          value={healingSelection}
+                          options={HEALING_TOGGLE_OPTIONS}
+                          onChange={(nextValue) =>
+                            updateVisitProcedureAt(index, (item) => ({
+                              ...item,
+                              extra_data: {
+                                ...item.extra_data,
+                                healing_used: nextValue === "yes",
+                                healing_size: nextValue === "yes" ? item.extra_data?.healing_size || "" : ""
                               }
                             }))
                           }
+                          getToneClass={getHealingToggleToneClass}
                         />
-                      </label>
+                      </div>
+
+                      {procedure.extra_data?.healing_used ? (
+                        <div className="implant-healing-panel field--full">
+                          <div className="implant-healing-panel__header">
+                            <strong>Healing Size</strong>
+                            <span>尺寸較多，集中在這裡選會比較清楚。</span>
+                          </div>
+                          <PillSelect
+                            className="pill-select--dense"
+                            value={procedure.extra_data?.healing_size || ""}
+                            options={HEALING_SIZE_OPTIONS}
+                            onChange={(nextValue) =>
+                              updateVisitProcedureAt(index, (item) => ({
+                                ...item,
+                                extra_data: {
+                                  ...item.extra_data,
+                                  healing_used: true,
+                                  healing_size: nextValue
+                                }
+                              }))
+                            }
+                            getToneClass={() => "pill--lavender"}
+                          />
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -3332,8 +3412,9 @@ export default function App() {
                       </select>
                     </label>
                   ) : null}
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           </div>
 

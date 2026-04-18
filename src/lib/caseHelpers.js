@@ -106,7 +106,10 @@ export function createEmptyProcedure(type = "consultation") {
     membrane_type: "",
     membrane_note: "",
     sinus_lift_approach: "",
-    extra_data: {}
+    extra_data: {
+      healing_used: false,
+      healing_size: ""
+    }
   };
 }
 

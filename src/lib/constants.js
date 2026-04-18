@@ -70,6 +70,72 @@ export const PHOTO_LABEL_OPTIONS = [
   "delivery"
 ];
 
+export const IMPLANT_BRAND_OPTIONS = [
+  { value: "osstem", label: "Osstem" },
+  { value: "astra", label: "Astra" },
+  { value: "iti", label: "ITI" }
+];
+
+export const IMPLANT_MODEL_OPTIONS_BY_BRAND = {
+  osstem: [{ value: "TSIII", label: "TSIII" }],
+  astra: [{ value: "TX", label: "TX" }],
+  iti: [
+    { value: "BLT", label: "BLT" },
+    { value: "BLX", label: "BLX" }
+  ]
+};
+
+export const IMPLANT_DIAMETER_OPTIONS = [
+  { value: "3.0", label: "3.0" },
+  { value: "3.3", label: "3.3" },
+  { value: "3.5", label: "3.5" },
+  { value: "4.0", label: "4.0" },
+  { value: "4.1", label: "4.1" },
+  { value: "4.5", label: "4.5" },
+  { value: "4.8", label: "4.8" },
+  { value: "5.0", label: "5.0" }
+];
+
+export const IMPLANT_LENGTH_OPTIONS = [
+  { value: "8.5", label: "8.5" },
+  { value: "9", label: "9" },
+  { value: "10", label: "10" },
+  { value: "11", label: "11" },
+  { value: "11.5", label: "11.5" },
+  { value: "12", label: "12" },
+  { value: "13", label: "13" }
+];
+
+export const HEALING_TOGGLE_OPTIONS = [
+  { value: "no", label: "否" },
+  { value: "yes", label: "是" }
+];
+
+export const HEALING_SIZE_OPTIONS = [
+  { value: "3.6x2", label: "3.6x2" },
+  { value: "3.6x3.5", label: "3.6x3.5" },
+  { value: "3.6x5", label: "3.6x5" },
+  { value: "4.0x2", label: "4.0x2" },
+  { value: "4.0x4", label: "4.0x4" },
+  { value: "4.0x5", label: "4.0x5" },
+  { value: "4.0x6", label: "4.0x6" },
+  { value: "4.5x2", label: "4.5x2" },
+  { value: "4.5x4", label: "4.5x4" },
+  { value: "4.5x5", label: "4.5x5" },
+  { value: "4.5x6", label: "4.5x6" },
+  { value: "4.8x2", label: "4.8x2" },
+  { value: "4.8x3.5", label: "4.8x3.5" },
+  { value: "4.8x5", label: "4.8x5" },
+  { value: "5.5x2", label: "5.5x2" },
+  { value: "5.5x4", label: "5.5x4" },
+  { value: "5.5x5", label: "5.5x5" },
+  { value: "5.5x6", label: "5.5x6" },
+  { value: "6.2", label: "6.2" },
+  { value: "6x4", label: "6x4" },
+  { value: "6x6", label: "6x6" },
+  { value: "7x7", label: "7x7" }
+];
+
 export const TEMPLATE_LABELS = {
   arp_to_implant: "ARP -> Implant",
   gbr_to_implant: "GBR -> Implant",
