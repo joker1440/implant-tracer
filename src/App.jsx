@@ -1,0 +1,3642 @@
+import { useDeferredValue, useEffect, useState } from "react";
+import DateInput from "./components/DateInput";
+import Modal from "./components/Modal";
+import PillSelect from "./components/PillSelect";
+import ToothPicker from "./components/ToothPicker";
+import {
+  CLINIC_OPTIONS,
+  BONE_GRAFT_OPTIONS,
+  CASE_STATUS_LABELS,
+  CASE_STATUS_OPTIONS,
+  MEMBRANE_OPTIONS,
+  NAV_ITEMS,
+  PHOTO_LABEL_OPTIONS,
+  PLAN_STATUS_LABELS,
+  PROCEDURE_LABELS,
+  PROCEDURE_OPTIONS,
+  SINUS_LIFT_APPROACH_OPTIONS,
+  TEMPLATE_FLOW_PREVIEWS,
+  TEMPLATE_LABELS
+} from "./lib/constants";
+import {
+  buildCsvFromCases,
+  buildPlanStepsFromTemplate,
+  createEmptyCase,
+  createEmptyPatient,
+  createEmptyPlanStep,
+  createEmptyProcedure,
+  createEmptyVisit,
+  formatCaseToothLabel,
+  getCaseToothCodes,
+  getOccupiedToothCodes,
+  normalizeToothCodes,
+  procedureMatchesSearch
+} from "./lib/caseHelpers";
+import {
+  addDays,
+  addMonths,
+  calculateAge,
+  cx,
+  daysFromToday,
+  formatDate,
+  formatDateTime,
+  formatShortMonthDay,
+  slugifyFileName,
+  todayIso
+} from "./lib/format";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
+
+const INITIAL_RECORDS = {
+  patients: [],
+  cases: [],
+  planSteps: [],
+  visits: [],
+  visitProcedures: [],
+  visitPhotos: [],
+  caseImplants: [],
+  toothPositions: [],
+  templates: [],
+  templateSteps: []
+};
+
+function groupBy(items, getKey) {
+  return items.reduce((accumulator, item) => {
+    const key = getKey(item);
+    if (!accumulator[key]) {
+      accumulator[key] = [];
+    }
+    accumulator[key].push(item);
+    return accumulator;
+  }, {});
+}
+
+function normalizeText(value) {
+  const nextValue = typeof value === "string" ? value.trim() : value;
+  return nextValue ? nextValue : null;
+}
+
+function numberOrNull(value) {
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function photoTitle(photo) {
+  if (!photo) {
+    return "未選";
+  }
+
+  return photo.photo_label || photo.caption || "Clinical Photo";
+}
+
+function cloneVisitPhotos(photos) {
+  return photos.map((photo) => ({
+    ...photo,
+    taken_at: photo.taken_at ? photo.taken_at.slice(0, 16) : "",
+    marked_for_delete: false
+  }));
+}
+
+function revokeDraftPhotoUrls(visitDraft) {
+  for (const photo of visitDraft.new_photos || []) {
+    if (photo.preview_url) {
+      URL.revokeObjectURL(photo.preview_url);
+    }
+  }
+}
+
+function comparePlanStepsByTimeline(left, right) {
+  if (!left.planned_date && !right.planned_date) {
+    return (left.step_order || 0) - (right.step_order || 0) || String(left.id || "").localeCompare(String(right.id || ""));
+  }
+  if (!left.planned_date) return 1;
+  if (!right.planned_date) return -1;
+
+  return (
+    left.planned_date.localeCompare(right.planned_date) ||
+    (left.step_order || 0) - (right.step_order || 0) ||
+    String(left.id || "").localeCompare(String(right.id || ""))
+  );
+}
+
+function deriveNextPlanStep(caseSteps, currentPlanStepId, referenceDate) {
+  const sortedSteps = (caseSteps || []).slice().sort(comparePlanStepsByTimeline);
+
+  if (currentPlanStepId) {
+    const currentIndex = sortedSteps.findIndex((step) => step.id === currentPlanStepId);
+    if (currentIndex >= 0) {
+      return sortedSteps
+        .slice(currentIndex + 1)
+        .find((step) => step.status === "pending") || null;
+    }
+  }
+
+  if (referenceDate) {
+    return (
+      sortedSteps.find(
+        (step) => step.status === "pending" && step.planned_date && step.planned_date >= referenceDate
+      ) || sortedSteps.find((step) => step.status === "pending") || null
+    );
+  }
+
+  return sortedSteps.find((step) => step.status === "pending") || null;
+}
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [records, setRecords] = useState(INITIAL_RECORDS);
+  const [loadingData, setLoadingData] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [lastSyncedAt, setLastSyncedAt] = useState("");
+  const [activeView, setActiveView] = useState("dashboard");
+  const [isTopbarCondensed, setIsTopbarCondensed] = useState(false);
+  const [selectedPatientId, setSelectedPatientId] = useState("");
+  const [selectedCaseId, setSelectedCaseId] = useState("");
+  const [patientQuery, setPatientQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [procedureFilter, setProcedureFilter] = useState("");
+  const [casePhotoCompare, setCasePhotoCompare] = useState({
+    before: "",
+    after: "",
+    open: false
+  });
+  const [photoPreview, setPhotoPreview] = useState({
+    open: false,
+    photoId: ""
+  });
+  const [draftPhotoEditor, setDraftPhotoEditor] = useState({
+    open: false,
+    kind: "existing",
+    index: -1
+  });
+  const [patientModal, setPatientModal] = useState({
+    open: false,
+    mode: "create",
+    patientId: "",
+    values: createEmptyPatient()
+  });
+  const [caseModal, setCaseModal] = useState({
+    open: false,
+    mode: "create",
+    caseId: "",
+    values: createEmptyCase()
+  });
+  const [planModal, setPlanModal] = useState({
+    open: false,
+    mode: "create",
+    stepId: "",
+    values: createEmptyPlanStep()
+  });
+  const [visitModal, setVisitModal] = useState({
+    open: false,
+    mode: "create",
+    visitId: "",
+    values: createEmptyVisit()
+  });
+  const deferredPatientQuery = useDeferredValue(patientQuery);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsTopbarCondensed(window.scrollY > 36);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      return undefined;
+    }
+
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!isMounted) {
+        return;
+      }
+
+      if (error) {
+        setAuthError(error.message);
+      }
+
+      setSession(data.session || null);
+      setAuthReady(true);
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession || null);
+      setAuthReady(true);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function loadAppData() {
+    if (!session?.user || !supabase) {
+      return;
+    }
+
+    setLoadingData(true);
+    setErrorMessage("");
+
+    const queries = [
+      supabase.from("patients").select("*").order("created_at", { ascending: false }),
+      supabase.from("cases").select("*").order("created_at", { ascending: false }),
+      supabase
+        .from("case_plan_steps")
+        .select("*")
+        .order("planned_date", { ascending: true, nullsFirst: false }),
+      supabase.from("visits").select("*").order("visited_on", { ascending: false }),
+      supabase
+        .from("visit_procedures")
+        .select("*")
+        .order("procedure_order", { ascending: true }),
+      supabase.from("visit_photos").select("*").order("created_at", { ascending: false }),
+      supabase.from("case_implants").select("*"),
+      supabase.from("tooth_positions").select("*").order("sort_order", { ascending: true }),
+      supabase.from("treatment_templates").select("*").order("label", { ascending: true }),
+      supabase
+        .from("treatment_template_steps")
+        .select("*")
+        .order("template_key", { ascending: true })
+        .order("step_order", { ascending: true })
+    ];
+
+    const [
+      patientsResult,
+      casesResult,
+      planStepsResult,
+      visitsResult,
+      proceduresResult,
+      photosResult,
+      implantsResult,
+      toothPositionsResult,
+      templatesResult,
+      templateStepsResult
+    ] = await Promise.all(queries);
+
+    const firstError = [
+      patientsResult.error,
+      casesResult.error,
+      planStepsResult.error,
+      visitsResult.error,
+      proceduresResult.error,
+      photosResult.error,
+      implantsResult.error,
+      toothPositionsResult.error,
+      templatesResult.error,
+      templateStepsResult.error
+    ].find(Boolean);
+
+    if (firstError) {
+      setErrorMessage(firstError.message);
+      setLoadingData(false);
+      return;
+    }
+
+    const hydratedPhotos = await Promise.all(
+      (photosResult.data || []).map(async (photo) => {
+        const signedUrlResult = await supabase.storage
+          .from(photo.bucket_name)
+          .createSignedUrl(photo.storage_path, 3600);
+        return {
+          ...photo,
+          signed_url: signedUrlResult.data?.signedUrl || ""
+        };
+      })
+    );
+
+    setRecords({
+      patients: patientsResult.data || [],
+      cases: casesResult.data || [],
+      planSteps: planStepsResult.data || [],
+      visits: visitsResult.data || [],
+      visitProcedures: proceduresResult.data || [],
+      visitPhotos: hydratedPhotos,
+      caseImplants: implantsResult.data || [],
+      toothPositions: toothPositionsResult.data || [],
+      templates: templatesResult.data || [],
+      templateSteps: templateStepsResult.data || []
+    });
+    setLastSyncedAt(new Date().toISOString());
+
+    setLoadingData(false);
+  }
+
+  useEffect(() => {
+    if (session?.user) {
+      loadAppData();
+    } else {
+      setRecords(INITIAL_RECORDS);
+      setSelectedPatientId("");
+      setSelectedCaseId("");
+    }
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!records.patients.length) {
+      if (selectedPatientId) {
+        setSelectedPatientId("");
+      }
+      return;
+    }
+
+    const hasSelectedPatient = records.patients.some(
+      (patient) => patient.id === selectedPatientId
+    );
+    if (!hasSelectedPatient) {
+      setSelectedPatientId(records.patients[0].id);
+    }
+  }, [records.patients, selectedPatientId]);
+
+  useEffect(() => {
+    if (!selectedPatientId) {
+      if (selectedCaseId) {
+        setSelectedCaseId("");
+      }
+      return;
+    }
+
+    const casesForPatient = records.cases.filter(
+      (entry) => entry.patient_id === selectedPatientId
+    );
+
+    if (!casesForPatient.length) {
+      if (selectedCaseId) {
+        setSelectedCaseId("");
+      }
+      return;
+    }
+
+    const hasSelectedCase = casesForPatient.some((entry) => entry.id === selectedCaseId);
+    if (!hasSelectedCase) {
+      setSelectedCaseId(casesForPatient[0].id);
+    }
+  }, [records.cases, selectedPatientId, selectedCaseId]);
+
+  const patientsById = Object.fromEntries(records.patients.map((item) => [item.id, item]));
+  const casesById = Object.fromEntries(records.cases.map((item) => [item.id, item]));
+  const visitsById = Object.fromEntries(records.visits.map((item) => [item.id, item]));
+  const caseImplantsByCaseId = Object.fromEntries(
+    records.caseImplants.map((item) => [item.case_id, item])
+  );
+  const planStepsByCaseId = groupBy(records.planSteps, (item) => item.case_id);
+  const visitsByCaseId = groupBy(records.visits, (item) => item.case_id);
+  const proceduresByVisitId = groupBy(records.visitProcedures, (item) => item.visit_id);
+  const photosByVisitId = groupBy(records.visitPhotos, (item) => item.visit_id);
+  const photosByCaseId = groupBy(records.visitPhotos, (item) => item.case_id);
+  const proceduresByCaseId = records.visitProcedures.reduce((accumulator, procedure) => {
+    const visit = visitsById[procedure.visit_id];
+    if (!visit) {
+      return accumulator;
+    }
+
+    if (!accumulator[visit.case_id]) {
+      accumulator[visit.case_id] = [];
+    }
+
+    accumulator[visit.case_id].push(procedure);
+    return accumulator;
+  }, {});
+
+  const deferredPatientQueryText = deferredPatientQuery.trim().toLowerCase();
+  const filteredPatients = records.patients.filter((patient) => {
+    if (!deferredPatientQueryText) {
+      return true;
+    }
+
+    return (
+      patient.full_name.toLowerCase().includes(deferredPatientQueryText) ||
+      (patient.attention_alert || "").toLowerCase().includes(deferredPatientQueryText)
+    );
+  });
+
+  const selectedPatient = patientsById[selectedPatientId] || null;
+  const selectedCase = casesById[selectedCaseId] || null;
+  const selectedPatientCases = records.cases
+    .filter((entry) => entry.patient_id === selectedPatientId)
+    .sort((left, right) => {
+      const rightDate = right.started_on || right.created_at;
+      const leftDate = left.started_on || left.created_at;
+      return rightDate.localeCompare(leftDate);
+    });
+  const selectedCasePlanSteps = (planStepsByCaseId[selectedCaseId] || [])
+    .slice()
+    .sort((left, right) => {
+      if (!left.planned_date) return 1;
+      if (!right.planned_date) return -1;
+      return left.planned_date.localeCompare(right.planned_date);
+    });
+  const selectedCaseVisits = (visitsByCaseId[selectedCaseId] || [])
+    .slice()
+    .sort((left, right) => right.visited_on.localeCompare(left.visited_on));
+  const selectedCaseImplant = selectedCaseId ? caseImplantsByCaseId[selectedCaseId] : null;
+  const selectedCasePhotos = (photosByCaseId[selectedCaseId] || []).slice();
+  const selectedCaseToothLabel = formatCaseToothLabel(selectedCase);
+  const selectedCaseToothHeading = formatCaseToothLabel(selectedCase, { withPrefix: true });
+  const getPlanStepLabel = (step) =>
+    PROCEDURE_LABELS[step?.procedure_type] || step?.title || "";
+  const getProcedureToneClass = (procedureType) => {
+    switch (procedureType) {
+      case "extraction":
+        return "pill--rose";
+      case "arp":
+        return "pill--sand";
+      case "gbr":
+        return "pill--mist";
+      case "sinus_lift":
+        return "pill--amber";
+      case "implant_placement":
+        return "pill--green";
+      case "fgg_ctg":
+        return "pill--petal";
+      case "stage_2_healing_abutment":
+        return "pill--mint";
+      case "impression_scan":
+        return "pill--lavender";
+      case "provisional":
+        return "pill--sky";
+      case "delivery":
+        return "pill--gold";
+      case "follow_up":
+        return "pill--sage";
+      default:
+        return "pill--stone";
+    }
+  };
+  const getCaseStatusToneClass = (status) => {
+    switch (status) {
+      case "active":
+        return "pill--green";
+      case "completed":
+        return "pill--sky";
+      case "on_hold":
+        return "pill--amber";
+      case "cancelled":
+        return "pill--rose";
+      case "planned":
+      default:
+        return "pill--stone";
+    }
+  };
+  const getMembraneToneClass = (membraneType) => {
+    switch (membraneType) {
+      case "resorbable":
+        return "pill--mint";
+      case "non_resorbable":
+        return "pill--amber";
+      default:
+        return "pill--stone";
+    }
+  };
+  const getPhotoLabelToneClass = (label) => {
+    switch (label) {
+      case "pre-op":
+        return "pill--rose";
+      case "post-op":
+        return "pill--mint";
+      case "panorama":
+        return "pill--mist";
+      case "cbct":
+        return "pill--sky";
+      case "healing":
+        return "pill--sage";
+      case "delivery":
+        return "pill--gold";
+      default:
+        return "pill--stone";
+    }
+  };
+  const caseDisplayNoById = Object.fromEntries(
+    Object.values(groupBy(records.cases, (entry) => entry.patient_id)).flatMap((patientCases) =>
+      patientCases
+        .slice()
+        .sort((left, right) => {
+          const leftKey = left.created_at || left.started_on || left.id;
+          const rightKey = right.created_at || right.started_on || right.id;
+          return leftKey.localeCompare(rightKey);
+        })
+        .map((entry, index) => [entry.id, index + 1])
+    )
+  );
+  const selectedPatientCaseToothCodes = selectedPatient
+    ? getOccupiedToothCodes(
+        records.cases.filter((entry) => entry.patient_id === selectedPatient.id),
+        caseModal.caseId
+      )
+    : [];
+  const selectedCasePhotoGroups = selectedCaseVisits
+    .map((visit) => ({
+      visit,
+      procedures: proceduresByVisitId[visit.id] || [],
+      photos: (photosByVisitId[visit.id] || []).slice()
+    }))
+    .filter((group) => group.photos.length > 0);
+
+  const pendingPlanSteps = records.planSteps
+    .filter((step) => step.status === "pending")
+    .map((step) => {
+      const caseEntry = casesById[step.case_id];
+      const patient = caseEntry ? patientsById[caseEntry.patient_id] : null;
+      return {
+        ...step,
+        caseEntry,
+        patient,
+        diffDays: step.planned_date ? daysFromToday(step.planned_date) : null
+      };
+    })
+    .filter((entry) => entry.caseEntry && entry.patient);
+
+  const overdueItems = pendingPlanSteps
+    .filter((entry) => entry.diffDays !== null && entry.diffDays < 0)
+    .sort((left, right) => left.diffDays - right.diffDays);
+
+  const upcomingItems = pendingPlanSteps
+    .filter((entry) => entry.diffDays !== null && entry.diffDays >= 0 && entry.diffDays <= 30)
+    .sort((left, right) => left.diffDays - right.diffDays);
+
+  const stats = {
+    totalCases: records.cases.length,
+    activeCases: records.cases.filter((entry) => entry.status === "active").length,
+    totalPatients: records.patients.length,
+    totalPhotos: records.visitPhotos.length
+  };
+  const nextFocusItem = overdueItems[0] || upcomingItems[0] || null;
+  const overviewHeadline = overdueItems.length
+    ? `目前有 ${overdueItems.length} 個逾期 case 要優先追蹤`
+    : upcomingItems.length
+      ? `接下來 30 天有 ${upcomingItems.length} 位病患待回診`
+      : "目前沒有逾期或即將回診的病患";
+  const overviewDetail = nextFocusItem
+    ? `${nextFocusItem.patient.full_name} · ${formatCaseToothLabel(nextFocusItem.caseEntry, {
+        withPrefix: true
+      })} · ${
+        getPlanStepLabel(nextFocusItem)
+      }${nextFocusItem.planned_date ? ` · ${formatDate(nextFocusItem.planned_date)}` : ""}`
+    : "今天可以把重點放在新增病患、建立 case 或補齊回診紀錄。";
+  const procedureFilterOptions = [
+    { value: "", label: "全部治療內容" },
+    ...PROCEDURE_OPTIONS
+  ];
+  const clinicSelectionOptions = [{ value: "", label: "未設定" }, ...CLINIC_OPTIONS];
+  const membraneSelectionOptions = [{ value: "", label: "未設定" }, ...MEMBRANE_OPTIONS];
+  const photoLabelSelectionOptions = [{ value: "", label: "未設定" }, ...PHOTO_LABEL_OPTIONS.map((option) => ({
+    value: option,
+    label: option
+  }))];
+  const nextPlanModeOptions = [
+    { value: "off", label: "先不安排" },
+    { value: "on", label: "安排下次" }
+  ];
+  const todayDate = todayIso();
+  const todayShortcuts = [{ label: "今天", value: todayDate }];
+  const followUpShortcuts = [
+    { label: "今天", value: todayDate },
+    { label: "+1M", value: addMonths(todayDate, 1) },
+    { label: "+2M", value: addMonths(todayDate, 2) },
+    { label: "+3M", value: addMonths(todayDate, 3) },
+    { label: "+4M", value: addMonths(todayDate, 4) },
+    { label: "+6M", value: addMonths(todayDate, 6) }
+  ];
+
+  const searchText = deferredSearchQuery.trim().toLowerCase();
+  const searchResults = records.cases.filter((entry) => {
+    const patient = patientsById[entry.patient_id];
+    const caseProcedures = proceduresByCaseId[entry.id] || [];
+
+    const matchesKeyword =
+      !searchText ||
+      patient?.full_name?.toLowerCase().includes(searchText) ||
+      String(caseDisplayNoById[entry.id] || "").includes(searchText) ||
+      getCaseToothCodes(entry).some((code) => code.toLowerCase().includes(searchText)) ||
+      procedureMatchesSearch(caseProcedures, searchText);
+
+    const matchesProcedure =
+      !procedureFilter ||
+      caseProcedures.some((procedure) => procedure.procedure_type === procedureFilter);
+
+    return matchesKeyword && matchesProcedure;
+  });
+
+  const caseBeforePhoto = selectedCasePhotos.find(
+    (photo) => photo.id === casePhotoCompare.before
+  );
+  const caseAfterPhoto = selectedCasePhotos.find(
+    (photo) => photo.id === casePhotoCompare.after
+  );
+  const previewPhoto = selectedCasePhotos.find((photo) => photo.id === photoPreview.photoId);
+  const previewPhotoVisit = previewPhoto ? visitsById[previewPhoto.visit_id] : null;
+  const previewPhotoProcedures = previewPhotoVisit ? proceduresByVisitId[previewPhotoVisit.id] || [] : [];
+  const currentUserEmail = session?.user?.email || "";
+  const showNoDataHint = Boolean(
+    authReady && session?.user && !loadingData && !records.patients.length
+  );
+  const activeDraftPhoto =
+    draftPhotoEditor.kind === "existing"
+      ? visitModal.values.existing_photos[draftPhotoEditor.index]
+      : visitModal.values.new_photos[draftPhotoEditor.index];
+
+  useEffect(() => {
+    const selectedIds = new Set(selectedCasePhotos.map((photo) => photo.id));
+
+    setCasePhotoCompare((current) => {
+      const nextBefore = selectedIds.has(current.before) ? current.before : "";
+      const nextAfter = selectedIds.has(current.after) ? current.after : "";
+      const nextOpen = current.open && nextBefore && nextAfter;
+
+      if (
+        current.before === nextBefore &&
+        current.after === nextAfter &&
+        current.open === nextOpen
+      ) {
+        return current;
+      }
+
+      return {
+        before: nextBefore,
+        after: nextAfter,
+        open: Boolean(nextOpen)
+      };
+    });
+  }, [selectedCaseId, selectedCasePhotos]);
+
+  function openPatientModal(mode, patient = null) {
+    setPatientModal({
+      open: true,
+      mode,
+      patientId: patient?.id || "",
+      values: patient
+        ? {
+            full_name: patient.full_name || "",
+            clinic_name: patient.clinic_name || "",
+            birth_date: patient.birth_date || "",
+            attention_alert: patient.attention_alert || "",
+            general_notes: patient.general_notes || ""
+          }
+        : createEmptyPatient()
+    });
+  }
+
+  function closePatientModal() {
+    setPatientModal((current) => ({ ...current, open: false }));
+  }
+
+  function openCaseModal(mode, caseEntry = null, patientId = selectedPatientId) {
+    const toothCodes = getCaseToothCodes(caseEntry);
+
+    setCaseModal({
+      open: true,
+      mode,
+      caseId: caseEntry?.id || "",
+      values: caseEntry
+        ? {
+            patient_id: caseEntry.patient_id,
+            tooth_codes: toothCodes,
+            status: caseEntry.status || "active",
+            template_key: caseEntry.template_key || "arp_to_implant",
+            title: caseEntry.title || "",
+            started_on: caseEntry.started_on || "",
+            target_restoration_on: caseEntry.target_restoration_on || "",
+            diagnosis_notes: caseEntry.diagnosis_notes || "",
+            internal_notes: caseEntry.internal_notes || ""
+          }
+        : {
+            ...createEmptyCase(patientId),
+            started_on: todayIso()
+          }
+    });
+  }
+
+  function closeCaseModal() {
+    setCaseModal((current) => ({ ...current, open: false }));
+  }
+
+  function openPlanModal(mode, step = null, caseId = selectedCaseId) {
+    const caseSteps = (planStepsByCaseId[caseId] || []).slice();
+    const latestDatedStep = caseSteps
+      .filter((item) => item.planned_date)
+      .sort(comparePlanStepsByTimeline)
+      .at(-1);
+
+    setPlanModal({
+      open: true,
+      mode,
+      stepId: step?.id || "",
+      values: step
+        ? {
+            case_id: step.case_id,
+            step_order: step.step_order,
+            title: PROCEDURE_LABELS[step.procedure_type] || step.title || "",
+            procedure_type: step.procedure_type || "follow_up",
+            planned_date: step.planned_date || "",
+            status: step.status || "pending",
+            note: step.note || ""
+          }
+        : {
+            ...createEmptyPlanStep(caseId),
+            planned_date: latestDatedStep?.planned_date
+              ? addDays(latestDatedStep.planned_date, 14)
+              : selectedCase?.started_on
+                ? addDays(selectedCase.started_on, 14)
+                : ""
+          }
+    });
+  }
+
+  function closePlanModal() {
+    setPlanModal((current) => ({ ...current, open: false }));
+  }
+
+  function openVisitModal(mode, caseId = selectedCaseId, visit = null, planStep = null) {
+    if (visitModal.open) {
+      revokeDraftPhotoUrls(visitModal.values);
+    }
+
+    const caseSteps = planStepsByCaseId[caseId] || [];
+    const existingPhotos = visit
+      ? cloneVisitPhotos(photosByVisitId[visit.id] || [])
+      : [];
+    const procedures = visit
+      ? (proceduresByVisitId[visit.id] || []).map((procedure) => ({
+          ...procedure,
+          implant_diameter_mm: procedure.implant_diameter_mm ?? "",
+          implant_length_mm: procedure.implant_length_mm ?? "",
+          bone_graft_materials: procedure.bone_graft_materials || [],
+          membrane_type: procedure.membrane_type || "",
+          membrane_note: procedure.membrane_note || "",
+          sinus_lift_approach: procedure.sinus_lift_approach || ""
+        }))
+      : [createEmptyProcedure(planStep?.procedure_type || "consultation")];
+    const referenceStepId = visit?.plan_step_id || planStep?.id || "";
+    const referenceDate = visit?.visited_on || planStep?.planned_date || todayIso();
+    const nextPlanStep = deriveNextPlanStep(caseSteps, referenceStepId, referenceDate);
+
+    setVisitModal({
+      open: true,
+      mode,
+      visitId: visit?.id || "",
+      values: visit
+        ? {
+            case_id: visit.case_id,
+            plan_step_id: visit.plan_step_id || "",
+            visited_on: visit.visited_on || "",
+            summary: visit.summary || "",
+            next_note: visit.next_note || "",
+            next_plan_enabled: Boolean(nextPlanStep),
+            next_plan_step_id: nextPlanStep?.id || "",
+            next_plan_procedure_type: nextPlanStep?.procedure_type || "",
+            next_plan_planned_date: nextPlanStep?.planned_date || "",
+            next_plan_note: nextPlanStep?.note || "",
+            procedures,
+            existing_photos: existingPhotos,
+            new_photos: []
+          }
+        : {
+            ...createEmptyVisit(caseId, planStep),
+            visited_on: planStep?.planned_date || todayIso(),
+            next_plan_enabled: Boolean(nextPlanStep),
+            next_plan_step_id: nextPlanStep?.id || "",
+            next_plan_procedure_type: nextPlanStep?.procedure_type || "",
+            next_plan_planned_date:
+              nextPlanStep?.planned_date || addDays(planStep?.planned_date || todayIso(), 14),
+            next_plan_note: nextPlanStep?.note || ""
+          }
+    });
+  }
+
+  function closeVisitModal() {
+    revokeDraftPhotoUrls(visitModal.values);
+    setDraftPhotoEditor({
+      open: false,
+      kind: "existing",
+      index: -1
+    });
+    setVisitModal((current) => ({ ...current, open: false }));
+  }
+
+  function openDraftPhotoEditor(kind, index) {
+    setDraftPhotoEditor({
+      open: true,
+      kind,
+      index
+    });
+  }
+
+  function closeDraftPhotoEditor() {
+    setDraftPhotoEditor({
+      open: false,
+      kind: "existing",
+      index: -1
+    });
+  }
+
+  function updateDraftPhoto(kind, index, patch) {
+    setVisitModal((current) => ({
+      ...current,
+      values: {
+        ...current.values,
+        [kind === "existing" ? "existing_photos" : "new_photos"]: current.values[
+          kind === "existing" ? "existing_photos" : "new_photos"
+        ].map((item, innerIndex) => (innerIndex === index ? { ...item, ...patch } : item))
+      }
+    }));
+  }
+
+  function toggleExistingPhotoDelete(index) {
+    setVisitModal((current) => ({
+      ...current,
+      values: {
+        ...current.values,
+        existing_photos: current.values.existing_photos.map((item, innerIndex) =>
+          innerIndex === index
+            ? {
+                ...item,
+                marked_for_delete: !item.marked_for_delete
+              }
+            : item
+        )
+      }
+    }));
+  }
+
+  function removeNewPhotoDraft(index) {
+    setVisitModal((current) => {
+      const target = current.values.new_photos[index];
+      if (target?.preview_url) {
+        URL.revokeObjectURL(target.preview_url);
+      }
+      return {
+        ...current,
+        values: {
+          ...current.values,
+          new_photos: current.values.new_photos.filter(
+            (_item, innerIndex) => innerIndex !== index
+          )
+        }
+      };
+    });
+
+    closeDraftPhotoEditor();
+  }
+
+  async function handleSignIn(event) {
+    event.preventDefault();
+    if (!supabase) {
+      return;
+    }
+
+    setAuthError("");
+    setBusyLabel("登入中");
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginForm.email,
+      password: loginForm.password
+    });
+
+    setBusyLabel("");
+
+    if (error) {
+      setAuthError(error.message);
+    }
+  }
+
+  async function handleSignOut() {
+    if (!supabase) {
+      return;
+    }
+    await supabase.auth.signOut();
+  }
+
+  async function removeStorageObjects(photoEntries) {
+    const paths = photoEntries.map((photo) => photo.storage_path).filter(Boolean);
+    if (!paths.length) {
+      return;
+    }
+
+    const { error } = await supabase.storage.from("case-photos").remove(paths);
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function handlePatientSubmit(event) {
+    event.preventDefault();
+    if (!supabase || !session?.user) {
+      return;
+    }
+
+    setBusyLabel(patientModal.mode === "create" ? "建立病患中" : "更新病患中");
+    setErrorMessage("");
+
+    const payload = {
+      owner_user_id: session.user.id,
+      full_name: patientModal.values.full_name.trim(),
+      clinic_name: patientModal.values.clinic_name || null,
+      birth_date: patientModal.values.birth_date || null,
+      attention_alert: normalizeText(patientModal.values.attention_alert),
+      general_notes: normalizeText(patientModal.values.general_notes)
+    };
+
+    const request =
+      patientModal.mode === "create"
+        ? supabase.from("patients").insert(payload)
+        : supabase.from("patients").update(payload).eq("id", patientModal.patientId);
+
+    const { error } = await request;
+    setBusyLabel("");
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    closePatientModal();
+    await loadAppData();
+  }
+
+  async function handleDeletePatient(patientId) {
+    if (!supabase || !patientId) {
+      return;
+    }
+
+    const confirmed = window.confirm("刪除此病患後，所有 case / 回診 / 照片都會一起刪除，確定嗎？");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyLabel("刪除病患中");
+      const patientCaseIds = records.cases
+        .filter((entry) => entry.patient_id === patientId)
+        .map((entry) => entry.id);
+      const photos = records.visitPhotos.filter((photo) => patientCaseIds.includes(photo.case_id));
+      await removeStorageObjects(photos);
+
+      const { error } = await supabase.from("patients").delete().eq("id", patientId);
+      if (error) {
+        throw error;
+      }
+
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handleCaseSubmit(event) {
+    event.preventDefault();
+    if (!supabase || !session?.user) {
+      return;
+    }
+
+    try {
+      setBusyLabel(caseModal.mode === "create" ? "建立 case 中" : "更新 case 中");
+      setErrorMessage("");
+
+      const toothCodes = normalizeToothCodes(caseModal.values.tooth_codes);
+
+      if (!toothCodes.length) {
+        setBusyLabel("");
+        setErrorMessage("請至少選擇一個牙位。");
+        return;
+      }
+
+      const payload = {
+        owner_user_id: session.user.id,
+        patient_id: caseModal.values.patient_id,
+        tooth_code: toothCodes[0],
+        tooth_codes: toothCodes,
+        status: caseModal.values.status,
+        template_key: caseModal.values.template_key || null,
+        title: normalizeText(caseModal.values.title),
+        started_on: caseModal.values.started_on || null,
+        target_restoration_on: caseModal.values.target_restoration_on || null,
+        diagnosis_notes: normalizeText(caseModal.values.diagnosis_notes),
+        internal_notes: normalizeText(caseModal.values.internal_notes)
+      };
+
+      if (caseModal.mode === "create") {
+        const { data, error } = await supabase
+          .from("cases")
+          .insert(payload)
+          .select("*")
+          .single();
+
+        if (error) {
+          throw error;
+        }
+
+        if (caseModal.values.template_key) {
+          const planSteps = buildPlanStepsFromTemplate(
+            caseModal.values.template_key,
+            records.templateSteps,
+            caseModal.values.started_on || null
+          ).map((step) => ({
+            owner_user_id: session.user.id,
+            case_id: data.id,
+            ...step
+          }));
+
+          if (planSteps.length) {
+            const { error: planError } = await supabase
+              .from("case_plan_steps")
+              .insert(planSteps);
+            if (planError) {
+              throw planError;
+            }
+          }
+        }
+
+        setSelectedPatientId(data.patient_id);
+        setSelectedCaseId(data.id);
+      } else {
+        const { error } = await supabase
+          .from("cases")
+          .update(payload)
+          .eq("id", caseModal.caseId);
+        if (error) {
+          throw error;
+        }
+      }
+
+      closeCaseModal();
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handleDeleteCase(caseId) {
+    if (!supabase || !caseId) {
+      return;
+    }
+
+    const confirmed = window.confirm("刪除此 case 後，所有計畫 / 回診 / 照片都會一起刪除，確定嗎？");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyLabel("刪除 case 中");
+      await removeStorageObjects(records.visitPhotos.filter((photo) => photo.case_id === caseId));
+
+      const { error } = await supabase.from("cases").delete().eq("id", caseId);
+      if (error) {
+        throw error;
+      }
+
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handlePlanSubmit(event) {
+    event.preventDefault();
+    if (!supabase || !session?.user) {
+      return;
+    }
+
+    try {
+      setBusyLabel(planModal.mode === "create" ? "新增計畫中" : "更新計畫中");
+      setErrorMessage("");
+
+      const currentCaseSteps = (planStepsByCaseId[planModal.values.case_id] || []).filter(
+        (step) => step.id !== planModal.stepId
+      );
+      const provisionalStep = {
+        ...(planModal.mode === "edit"
+          ? currentCaseSteps.find((step) => step.id === planModal.stepId)
+          : null),
+        id: planModal.stepId || `draft-${Date.now()}`,
+        planned_date: planModal.values.planned_date || null,
+        step_order: 0
+      };
+      const nextOrderedSteps = currentCaseSteps.concat(provisionalStep).sort(comparePlanStepsByTimeline);
+      const computedStepOrder =
+        nextOrderedSteps.findIndex((step) => step.id === provisionalStep.id) + 1;
+
+      const payload = {
+        owner_user_id: session.user.id,
+        case_id: planModal.values.case_id,
+        step_order: computedStepOrder,
+        title: PROCEDURE_LABELS[planModal.values.procedure_type] || planModal.values.procedure_type,
+        procedure_type: planModal.values.procedure_type,
+        planned_date: planModal.values.planned_date || null,
+        status: planModal.values.status || "pending",
+        note: normalizeText(planModal.values.note)
+      };
+
+      const request =
+        planModal.mode === "create"
+          ? supabase.from("case_plan_steps").insert(payload).select().single()
+          : supabase.from("case_plan_steps").update(payload).eq("id", planModal.stepId).select().single();
+
+      const { data: savedStep, error } = await request;
+      if (error) {
+        throw error;
+      }
+
+      const normalizedSteps = currentCaseSteps
+        .concat(savedStep)
+        .sort(comparePlanStepsByTimeline)
+        .map((step, index) => ({ id: step.id, step_order: index + 1 }))
+        .filter((step) => step.id !== savedStep.id || step.step_order !== savedStep.step_order);
+
+      if (normalizedSteps.length) {
+        await Promise.all(
+          normalizedSteps.map((step) =>
+            supabase.from("case_plan_steps").update({ step_order: step.step_order }).eq("id", step.id)
+          )
+        );
+      }
+
+      closePlanModal();
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handleDeletePlanStep(stepId) {
+    if (!supabase || !stepId) {
+      return;
+    }
+
+    const confirmed = window.confirm("刪除此計畫步驟嗎？");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyLabel("刪除計畫中");
+      const deletedStep = records.planSteps.find((step) => step.id === stepId);
+      const { error } = await supabase.from("case_plan_steps").delete().eq("id", stepId);
+      if (error) {
+        throw error;
+      }
+
+      if (deletedStep?.case_id) {
+        const remainingSteps = (planStepsByCaseId[deletedStep.case_id] || [])
+          .filter((step) => step.id !== stepId)
+          .sort(comparePlanStepsByTimeline);
+
+        await Promise.all(
+          remainingSteps.map((step, index) =>
+            supabase.from("case_plan_steps").update({ step_order: index + 1 }).eq("id", step.id)
+          )
+        );
+      }
+
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  function pushNewPhotoDrafts(fileList) {
+    const nextDrafts = Array.from(fileList || []).map((file) => ({
+      local_id: crypto.randomUUID(),
+      file,
+      caption: "",
+      photo_label: "",
+      taken_at: "",
+      preview_url: URL.createObjectURL(file)
+    }));
+
+    setVisitModal((current) => ({
+      ...current,
+      values: {
+        ...current.values,
+        new_photos: current.values.new_photos.concat(nextDrafts)
+      }
+    }));
+  }
+
+  async function uploadVisitPhotos(visitId, caseId, drafts) {
+    if (!supabase || !session?.user || !drafts.length) {
+      return;
+    }
+
+    const caseEntry = casesById[caseId];
+    const patientId = caseEntry?.patient_id;
+    if (!patientId) {
+      return;
+    }
+
+    for (const [index, draft] of drafts.entries()) {
+      const extension = draft.file.name.split(".").pop() || "jpg";
+      const safeName = slugifyFileName(
+        `${crypto.randomUUID()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
+      );
+      const storagePath = `${session.user.id}/${patientId}/${caseId}/${visitId}/${safeName}`;
+
+      const uploadResult = await supabase.storage
+        .from("case-photos")
+        .upload(storagePath, draft.file, {
+          contentType: draft.file.type,
+          upsert: false
+        });
+
+      if (uploadResult.error) {
+        throw uploadResult.error;
+      }
+
+      const { error } = await supabase.from("visit_photos").insert({
+        owner_user_id: session.user.id,
+        visit_id: visitId,
+        case_id: caseId,
+        storage_path: storagePath,
+        file_name: draft.file.name,
+        mime_type: draft.file.type,
+        caption: normalizeText(draft.caption),
+        photo_label: normalizeText(draft.photo_label),
+        sort_order: index + 1
+      });
+
+      if (error) {
+        throw error;
+      }
+    }
+  }
+
+  async function handleVisitSubmit(event) {
+    event.preventDefault();
+    if (!supabase || !session?.user) {
+      return;
+    }
+
+    try {
+      setBusyLabel(visitModal.mode === "create" ? "建立回診中" : "更新回診中");
+      setErrorMessage("");
+
+      const visitPayload = {
+        owner_user_id: session.user.id,
+        case_id: visitModal.values.case_id,
+        plan_step_id: visitModal.values.plan_step_id || null,
+        visited_on: visitModal.values.visited_on,
+        summary: normalizeText(visitModal.values.summary),
+        next_note: normalizeText(visitModal.values.next_note)
+      };
+
+      let visitId = visitModal.visitId;
+
+      if (visitModal.mode === "create") {
+        const { data, error } = await supabase
+          .from("visits")
+          .insert(visitPayload)
+          .select("*")
+          .single();
+
+        if (error) {
+          throw error;
+        }
+        visitId = data.id;
+      } else {
+        const { error } = await supabase
+          .from("visits")
+          .update(visitPayload)
+          .eq("id", visitId);
+        if (error) {
+          throw error;
+        }
+      }
+
+      const { error: deleteProceduresError } = await supabase
+        .from("visit_procedures")
+        .delete()
+        .eq("visit_id", visitId);
+      if (deleteProceduresError) {
+        throw deleteProceduresError;
+      }
+
+      const normalizedProcedures = visitModal.values.procedures
+        .filter((procedure) => procedure.procedure_type)
+        .map((procedure, index) => ({
+          owner_user_id: session.user.id,
+          visit_id: visitId,
+          procedure_order: index + 1,
+          procedure_type: procedure.procedure_type,
+          procedure_note: normalizeText(procedure.procedure_note),
+          implant_brand: normalizeText(procedure.implant_brand),
+          implant_model: normalizeText(procedure.implant_model),
+          implant_diameter_mm: numberOrNull(procedure.implant_diameter_mm),
+          implant_length_mm: numberOrNull(procedure.implant_length_mm),
+          bone_graft_materials: procedure.bone_graft_materials || [],
+          membrane_type: procedure.membrane_type || null,
+          membrane_note: normalizeText(procedure.membrane_note),
+          sinus_lift_approach: procedure.sinus_lift_approach || null,
+          extra_data: procedure.extra_data || {}
+        }));
+
+      if (normalizedProcedures.length) {
+        const { error } = await supabase
+          .from("visit_procedures")
+          .insert(normalizedProcedures);
+        if (error) {
+          throw error;
+        }
+      }
+
+      const photosToDelete = visitModal.values.existing_photos.filter(
+        (photo) => photo.marked_for_delete
+      );
+      if (photosToDelete.length) {
+        await removeStorageObjects(photosToDelete);
+        const deletePhotoIds = photosToDelete.map((photo) => photo.id);
+        const { error } = await supabase
+          .from("visit_photos")
+          .delete()
+          .in("id", deletePhotoIds);
+        if (error) {
+          throw error;
+        }
+      }
+
+      const photosToUpdate = visitModal.values.existing_photos.filter(
+        (photo) => !photo.marked_for_delete
+      );
+      for (const [index, photo] of photosToUpdate.entries()) {
+        const { error } = await supabase
+          .from("visit_photos")
+          .update({
+            caption: normalizeText(photo.caption),
+            photo_label: normalizeText(photo.photo_label),
+            sort_order: index + 1
+          })
+          .eq("id", photo.id);
+        if (error) {
+          throw error;
+        }
+      }
+
+      await uploadVisitPhotos(
+        visitId,
+        visitModal.values.case_id,
+        visitModal.values.new_photos
+      );
+
+      if (visitModal.values.plan_step_id) {
+        const { error } = await supabase
+          .from("case_plan_steps")
+          .update({
+            status: "completed",
+            completed_visit_id: visitId,
+            completed_at: new Date().toISOString()
+          })
+          .eq("id", visitModal.values.plan_step_id);
+        if (error) {
+          throw error;
+        }
+      }
+
+      if (
+        visitModal.values.next_plan_enabled &&
+        visitModal.values.next_plan_procedure_type &&
+        visitModal.values.next_plan_planned_date
+      ) {
+        const currentCaseSteps = (planStepsByCaseId[visitModal.values.case_id] || []).filter(
+          (step) =>
+            step.id !== visitModal.values.plan_step_id && step.id !== visitModal.values.next_plan_step_id
+        );
+        const provisionalNextStep = {
+          id: visitModal.values.next_plan_step_id || `next-${Date.now()}`,
+          case_id: visitModal.values.case_id,
+          planned_date: visitModal.values.next_plan_planned_date,
+          procedure_type: visitModal.values.next_plan_procedure_type,
+          status: "pending",
+          note: visitModal.values.next_plan_note || "",
+          step_order: 0
+        };
+        const orderedSteps = currentCaseSteps.concat(provisionalNextStep).sort(comparePlanStepsByTimeline);
+        const computedStepOrder =
+          orderedSteps.findIndex((step) => step.id === provisionalNextStep.id) + 1;
+        const nextPlanPayload = {
+          owner_user_id: session.user.id,
+          case_id: visitModal.values.case_id,
+          step_order: computedStepOrder,
+          title:
+            PROCEDURE_LABELS[visitModal.values.next_plan_procedure_type] ||
+            visitModal.values.next_plan_procedure_type,
+          procedure_type: visitModal.values.next_plan_procedure_type,
+          planned_date: visitModal.values.next_plan_planned_date,
+          status: "pending",
+          note: normalizeText(visitModal.values.next_plan_note)
+        };
+
+        const nextPlanRequest = visitModal.values.next_plan_step_id
+          ? supabase
+              .from("case_plan_steps")
+              .update(nextPlanPayload)
+              .eq("id", visitModal.values.next_plan_step_id)
+              .select()
+              .single()
+          : supabase.from("case_plan_steps").insert(nextPlanPayload).select().single();
+
+        const { data: savedNextStep, error: nextPlanError } = await nextPlanRequest;
+        if (nextPlanError) {
+          throw nextPlanError;
+        }
+
+        const normalizedSteps = currentCaseSteps
+          .concat(savedNextStep)
+          .sort(comparePlanStepsByTimeline)
+          .map((step, index) => ({ id: step.id, step_order: index + 1 }))
+          .filter((step) => step.id !== savedNextStep.id || step.step_order !== savedNextStep.step_order);
+
+        if (normalizedSteps.length) {
+          await Promise.all(
+            normalizedSteps.map((step) =>
+              supabase.from("case_plan_steps").update({ step_order: step.step_order }).eq("id", step.id)
+            )
+          );
+        }
+      }
+
+      closeVisitModal();
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handleDeleteVisit(visit) {
+    if (!supabase || !visit?.id) {
+      return;
+    }
+
+    const confirmed = window.confirm("刪除此回診紀錄嗎？");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyLabel("刪除回診中");
+      const visitPhotos = records.visitPhotos.filter((photo) => photo.visit_id === visit.id);
+      await removeStorageObjects(visitPhotos);
+
+      if (visit.plan_step_id) {
+        const { error: stepError } = await supabase
+          .from("case_plan_steps")
+          .update({
+            status: "pending",
+            completed_visit_id: null,
+            completed_at: null
+          })
+          .eq("id", visit.plan_step_id);
+        if (stepError) {
+          throw stepError;
+        }
+      }
+
+      const { error } = await supabase.from("visits").delete().eq("id", visit.id);
+      if (error) {
+        throw error;
+      }
+
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  async function handleDeletePhoto(photo) {
+    if (!supabase || !photo?.id) {
+      return;
+    }
+
+    const confirmed = window.confirm("刪除此照片嗎？");
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setBusyLabel("刪除照片中");
+      await removeStorageObjects([photo]);
+      const { error } = await supabase.from("visit_photos").delete().eq("id", photo.id);
+      if (error) {
+        throw error;
+      }
+      await loadAppData();
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  function handleExportCsv() {
+    const csv = buildCsvFromCases({
+      cases: records.cases,
+      patientsById,
+      planStepsByCaseId,
+      visitsByCaseId,
+      caseImplantsByCaseId,
+      caseDisplayNoById
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `implant-tracker-${todayIso()}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (!isSupabaseConfigured) {
+    return (
+      <main className="setup-screen">
+        <section className="setup-card">
+          <div className="brand-block">
+            <span className="brand-mark">IT</span>
+            <div>
+              <p className="eyebrow">Implant Tracker</p>
+              <h1>Supabase 尚未設定</h1>
+            </div>
+          </div>
+          <p>
+            請先在專案根目錄建立 <code>.env</code>，並填入 <code>VITE_SUPABASE_URL</code> 與{" "}
+            <code>VITE_SUPABASE_ANON_KEY</code>。
+          </p>
+          <p>
+            SQL migration 已放在{" "}
+            <code>supabase/migrations/202604160020_init_implant_case_manager.sql</code>。
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authReady) {
+    return <div className="loading-screen">讀取登入狀態中...</div>;
+  }
+
+  if (!session) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card">
+          <div className="brand-block">
+            <span className="brand-mark">IT</span>
+            <div>
+              <p className="eyebrow">Implant Tracker</p>
+              <h1>植牙 Case 管理系統</h1>
+            </div>
+          </div>
+          <p className="auth-copy">
+            使用 Supabase Auth 的 email / password 登入。這版預設單人使用，但資料與 Storage
+            都已經做好 owner-based 權限。
+          </p>
+          <form className="auth-form" onSubmit={handleSignIn}>
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                value={loginForm.email}
+                onChange={(event) =>
+                  setLoginForm((current) => ({ ...current, email: event.target.value }))
+                }
+                placeholder="doctor@example.com"
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(event) =>
+                  setLoginForm((current) => ({ ...current, password: event.target.value }))
+                }
+                placeholder="••••••••"
+                required
+              />
+            </label>
+            {authError ? <p className="error-text">{authError}</p> : null}
+            <button className="primary-button" type="submit" disabled={Boolean(busyLabel)}>
+              {busyLabel || "登入"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="topbar-shell">
+        <header className={cx("topbar", isTopbarCondensed && "is-condensed")}>
+          <div className="topbar__left">
+            <div className="brand-block brand-block--compact">
+              <span className="brand-mark">IT</span>
+              <div>
+                <p className="eyebrow">Implant Tracker</p>
+                <h1>Case Board</h1>
+              </div>
+            </div>
+            <nav className="nav-pills">
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.key}
+                  className={cx("nav-pill", activeView === item.key && "is-active")}
+                  type="button"
+                  onClick={() => setActiveView(item.key)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+
+          <div className="topbar__actions">
+            <button className="secondary-button" type="button" onClick={handleExportCsv}>
+              匯出 CSV
+            </button>
+            <button className="ghost-button" type="button" onClick={loadAppData}>
+              重新整理
+            </button>
+            <div className="date-chip">{formatDate(todayIso())}</div>
+            <button className="ghost-button" type="button" onClick={handleSignOut}>
+              登出
+            </button>
+          </div>
+        </header>
+      </div>
+
+      {errorMessage ? <div className="flash flash--error">{errorMessage}</div> : null}
+      {busyLabel ? <div className="flash flash--busy">{busyLabel}...</div> : null}
+      {showNoDataHint ? (
+        <div className="flash flash--info">
+          {`目前登入帳號：${currentUserEmail || "未顯示"}。這個帳號目前沒有病患資料；如果你原本應該看得到資料，請確認是否登入正確帳號，或按一次「重新整理」。`}
+        </div>
+      ) : null}
+
+      <main className="page">
+        {activeView === "dashboard" ? (
+          <section className="view-stack">
+            <div className="hero-panel">
+              <div className="hero-panel__content">
+                <p className="eyebrow">Today</p>
+                <h2>{overviewHeadline}</h2>
+                <p className="muted-text">{overviewDetail}</p>
+                <div className="hero-panel__highlights">
+                  <span className="tag">逾期 {overdueItems.length}</span>
+                  <span className="tag">即將回診 {upcomingItems.length}</span>
+                  <span className="tag">進行中 {stats.activeCases}</span>
+                </div>
+              </div>
+              <div className="hero-panel__status">
+                <span className="status-dot status-dot--ok" />
+                {loadingData
+                  ? "同步中"
+                  : lastSyncedAt
+                    ? `更新於 ${formatDateTime(lastSyncedAt)}`
+                    : "資料已同步"}
+              </div>
+            </div>
+
+            <section className="stats-grid">
+              <article className="stat-card">
+                <span className="stat-value">{stats.totalCases}</span>
+                <span className="stat-label">總 Cases</span>
+              </article>
+              <article className="stat-card">
+                <span className="stat-value">{stats.activeCases}</span>
+                <span className="stat-label">進行中</span>
+              </article>
+              <article className="stat-card">
+                <span className="stat-value">{stats.totalPatients}</span>
+                <span className="stat-label">病患數</span>
+              </article>
+              <article className="stat-card">
+                <span className="stat-value">{stats.totalPhotos}</span>
+                <span className="stat-label">照片數</span>
+              </article>
+            </section>
+
+            <section className="dual-columns">
+              <section className="panel">
+                <div className="panel-heading panel-heading--danger">
+                  <div>
+                    <p className="eyebrow">Overdue</p>
+                    <h3>逾期未回診 ({overdueItems.length})</h3>
+                  </div>
+                </div>
+                {overdueItems.length ? (
+                  <div className="agenda-list">
+                    {overdueItems.map((item) => {
+                      const monthDay = formatShortMonthDay(item.planned_date);
+                      return (
+                        <button
+                          key={item.id}
+                          className="agenda-item"
+                          type="button"
+                          onClick={() => {
+                            setActiveView("patients");
+                            setSelectedPatientId(item.patient.id);
+                            setSelectedCaseId(item.caseEntry.id);
+                          }}
+                        >
+                          <div className="calendar-chip">
+                            <span>{monthDay.month}</span>
+                            <strong>{monthDay.day}</strong>
+                          </div>
+                          <div className="agenda-item__body">
+                            <div className="agenda-item__row">
+                              <strong>{item.patient.full_name}</strong>
+                              <span className="tag">#{caseDisplayNoById[item.caseEntry.id]}</span>
+                            </div>
+                            <div className="agenda-item__row">
+                              <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                                {getPlanStepLabel(item)}
+                              </span>
+                              <span className="overdue-text">逾期 {Math.abs(item.diffDays)} 天</span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="empty-state">目前沒有逾期個案。</div>
+                )}
+              </section>
+
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Upcoming</p>
+                    <h3>即將回診</h3>
+                  </div>
+                </div>
+                {upcomingItems.length ? (
+                  <div className="agenda-list">
+                    {upcomingItems.map((item) => (
+                      <button
+                        key={item.id}
+                        className="agenda-item"
+                        type="button"
+                        onClick={() => {
+                          setActiveView("patients");
+                          setSelectedPatientId(item.patient.id);
+                          setSelectedCaseId(item.caseEntry.id);
+                        }}
+                      >
+                        <div className="calendar-chip calendar-chip--soft">
+                          <span>{formatShortMonthDay(item.planned_date).month}</span>
+                          <strong>{formatShortMonthDay(item.planned_date).day}</strong>
+                        </div>
+                        <div className="agenda-item__body">
+                          <div className="agenda-item__row">
+                            <strong>{item.patient.full_name}</strong>
+                            <span className="tag">{formatCaseToothLabel(item.caseEntry)}</span>
+                          </div>
+                          <div className="agenda-item__row">
+                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                              {getPlanStepLabel(item)}
+                            </span>
+                            <span className="muted-text">{formatDate(item.planned_date)}</span>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">接下來 30 天沒有待回診病患。</div>
+                )}
+              </section>
+            </section>
+          </section>
+        ) : null}
+
+        {activeView === "patients" ? (
+          <section className="patients-layout">
+            <aside className="panel sidebar">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Patients</p>
+                  <h3>病患名單</h3>
+                </div>
+                <button className="primary-button" type="button" onClick={() => openPatientModal("create")}>
+                  新增病患
+                </button>
+              </div>
+
+              <label className="field">
+                <span>搜尋病患</span>
+                <input
+                  value={patientQuery}
+                  onChange={(event) => setPatientQuery(event.target.value)}
+                  placeholder="姓名 / 生日 / 注意事項"
+                />
+              </label>
+
+              <div className="patient-list">
+                {filteredPatients.map((patient) => {
+                  const patientCases = records.cases.filter(
+                    (entry) => entry.patient_id === patient.id
+                  );
+
+                  return (
+                    <button
+                      key={patient.id}
+                      className={cx(
+                        "patient-item",
+                        selectedPatientId === patient.id && "is-selected"
+                      )}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPatientId(patient.id);
+                        setActiveView("patients");
+                      }}
+                    >
+                      <div className="patient-item__title">
+                        <strong>{patient.full_name}</strong>
+                        {patient.attention_alert ? <span className="warning-dot" /> : null}
+                      </div>
+                      <div className="patient-item__meta">
+                        <span>
+                          {patient.birth_date
+                            ? `${calculateAge(patient.birth_date) ?? "-"} 歲`
+                            : "未設定生日"}
+                        </span>
+                        <span>{patientCases.length} case(s)</span>
+                      </div>
+                    </button>
+                  );
+                })}
+                {!filteredPatients.length ? (
+                  <div className="empty-state">查無病患。</div>
+                ) : null}
+              </div>
+            </aside>
+
+            <section className="view-stack">
+              {selectedPatient ? (
+                <>
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">Patient Detail</p>
+                        <h3>{selectedPatient.full_name}</h3>
+                      </div>
+                      <div className="inline-actions">
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => openPatientModal("edit", selectedPatient)}
+                        >
+                          編輯病患
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => handleDeletePatient(selectedPatient.id)}
+                        >
+                          刪除病患
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="detail-grid">
+                      <div className="detail-card">
+                        <span className="detail-label">診所</span>
+                        <strong>{selectedPatient.clinic_name || "未設定"}</strong>
+                      </div>
+                      <div className="detail-card">
+                        <span className="detail-label">生日</span>
+                        <strong>
+                          {selectedPatient.birth_date
+                            ? formatDate(selectedPatient.birth_date)
+                            : "未設定"}
+                        </strong>
+                      </div>
+                      <div className="detail-card">
+                        <span className="detail-label">年齡</span>
+                        <strong>
+                          {selectedPatient.birth_date
+                            ? `${calculateAge(selectedPatient.birth_date) ?? "-"} 歲`
+                            : "未設定"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {selectedPatient.attention_alert ? (
+                      <div className="alert-banner">
+                        <strong>注意事項</strong>
+                        <p>{selectedPatient.attention_alert}</p>
+                      </div>
+                    ) : null}
+
+                    {selectedPatient.general_notes ? (
+                      <div className="note-block">
+                        <span className="detail-label">病患備註</span>
+                        <p>{selectedPatient.general_notes}</p>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">Cases</p>
+                        <h3>個案列表</h3>
+                      </div>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        onClick={() => openCaseModal("create", null, selectedPatient.id)}
+                      >
+                        新增 Case
+                      </button>
+                    </div>
+
+                    <div className="case-grid">
+                      {selectedPatientCases.map((entry) => {
+                        const nextStep = (planStepsByCaseId[entry.id] || [])
+                          .filter((step) => step.status === "pending")
+                          .sort((left, right) => {
+                            if (!left.planned_date) return 1;
+                            if (!right.planned_date) return -1;
+                            return left.planned_date.localeCompare(right.planned_date);
+                          })[0];
+
+                        return (
+                          <button
+                            key={entry.id}
+                            className={cx("case-card", selectedCaseId === entry.id && "is-selected")}
+                            type="button"
+                            onClick={() => setSelectedCaseId(entry.id)}
+                          >
+                            <div className="case-card__header">
+                              <div className="chip-row">
+                                <span className="tag">#{caseDisplayNoById[entry.id]}</span>
+                                <span className="tag">{formatCaseToothLabel(entry)}</span>
+                              </div>
+                            </div>
+                            <strong>{entry.title || TEMPLATE_LABELS[entry.template_key] || "Implant Case"}</strong>
+                            <div className="case-card__meta">
+                              <span>{CASE_STATUS_LABELS[entry.status]}</span>
+                              {entry.template_key ? (
+                                <span>{TEMPLATE_LABELS[entry.template_key]}</span>
+                              ) : null}
+                            </div>
+                            {nextStep ? (
+                              <p className="case-card__next">
+                                下次 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
+                              </p>
+                            ) : (
+                              <p className="case-card__next">尚未設定下次回診</p>
+                            )}
+                          </button>
+                        );
+                      })}
+                      {!selectedPatientCases.length ? (
+                        <div className="empty-state">這位病患尚未建立 case。</div>
+                      ) : null}
+                    </div>
+                  </section>
+
+                  {selectedCase ? (
+                    <>
+                      <section className="panel">
+                        <div className="panel-heading">
+                          <div>
+                            <p className="eyebrow">Case Detail</p>
+                            <h3>
+                              #{caseDisplayNoById[selectedCase.id]} / {selectedCaseToothHeading}
+                            </h3>
+                          </div>
+                          <div className="inline-actions">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={() => openCaseModal("edit", selectedCase)}
+                            >
+                              編輯 Case
+                            </button>
+                            <button
+                              className="danger-button"
+                              type="button"
+                              onClick={() => handleDeleteCase(selectedCase.id)}
+                            >
+                              刪除 Case
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="detail-grid">
+                          <div className="detail-card">
+                            <span className="detail-label">開始日期</span>
+                            <strong>{selectedCase.started_on ? formatDate(selectedCase.started_on) : "未設定"}</strong>
+                          </div>
+                        </div>
+
+                        {selectedCase.diagnosis_notes ? (
+                          <div className="note-block">
+                            <span className="detail-label">初診備註</span>
+                            <p>{selectedCase.diagnosis_notes}</p>
+                          </div>
+                        ) : null}
+
+                        {selectedCase.internal_notes ? (
+                          <div className="note-block">
+                            <span className="detail-label">內部備註</span>
+                            <p>{selectedCase.internal_notes}</p>
+                          </div>
+                        ) : null}
+
+                        {selectedCaseImplant ? (
+                          <div className="implant-snapshot">
+                            <div>
+                              <p className="eyebrow">Implant Snapshot</p>
+                              <h4>最新植體資訊</h4>
+                            </div>
+                            <div className="implant-snapshot__grid">
+                              <div>
+                                <span className="detail-label">Brand / Model</span>
+                                <strong>
+                                  {selectedCaseImplant.brand || "-"} {selectedCaseImplant.model || ""}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="detail-label">Diameter / Length</span>
+                                <strong>
+                                  {selectedCaseImplant.diameter_mm || "-"} / {selectedCaseImplant.length_mm || "-"} mm
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="detail-label">Placed On</span>
+                                <strong>
+                                  {selectedCaseImplant.placed_on
+                                    ? formatDate(selectedCaseImplant.placed_on)
+                                    : "未設定"}
+                                </strong>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </section>
+
+                      <section className="dual-columns">
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Plan</p>
+                              <h3>治療計劃</h3>
+                            </div>
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={() => openPlanModal("create")}
+                            >
+                              進階新增
+                            </button>
+                          </div>
+
+                          <div className="timeline-list">
+                            {selectedCasePlanSteps.map((step) => (
+                              <article key={step.id} className="timeline-item">
+                                <div className="timeline-item__main">
+                                  <div className="timeline-item__row">
+                                    <strong>
+                                      {getPlanStepLabel(step)}
+                                    </strong>
+                                    <span
+                                      className={cx(
+                                        "pill",
+                                        step.status === "completed" && "pill--green",
+                                        step.status === "pending" &&
+                                          step.planned_date &&
+                                          daysFromToday(step.planned_date) < 0 &&
+                                          "pill--danger"
+                                      )}
+                                    >
+                                      {PLAN_STATUS_LABELS[step.status]}
+                                    </span>
+                                  </div>
+                                  <div className="timeline-item__row">
+                                    <span>{PROCEDURE_LABELS[step.procedure_type]}</span>
+                                    <span>{step.planned_date ? formatDate(step.planned_date) : "未排日期"}</span>
+                                  </div>
+                                  {step.note ? <p className="muted-text">{step.note}</p> : null}
+                                </div>
+                                <div className="timeline-item__actions">
+                                  {step.status === "pending" ? (
+                                    <button
+                                      className="primary-button"
+                                      type="button"
+                                      onClick={() => openVisitModal("create", selectedCase.id, null, step)}
+                                    >
+                                      完成此步驟
+                                    </button>
+                                  ) : null}
+                                  <div className="timeline-item__secondary-actions">
+                                    <button
+                                      className="ghost-button"
+                                      type="button"
+                                      onClick={() => openPlanModal("edit", step)}
+                                    >
+                                      編輯
+                                    </button>
+                                    <button
+                                      className="danger-button danger-button--ghost"
+                                      type="button"
+                                      onClick={() => handleDeletePlanStep(step.id)}
+                                    >
+                                      刪除
+                                    </button>
+                                  </div>
+                                </div>
+                              </article>
+                            ))}
+                            {!selectedCasePlanSteps.length ? (
+                              <div className="empty-state">尚未建立計畫步驟。</div>
+                            ) : null}
+                          </div>
+                        </section>
+
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <div>
+                              <p className="eyebrow">Visits</p>
+                              <h3>回診紀錄</h3>
+                            </div>
+                            <button
+                              className="primary-button"
+                              type="button"
+                              onClick={() => openVisitModal("create")}
+                            >
+                              新增回診
+                            </button>
+                          </div>
+
+                          <div className="visit-list">
+                            {selectedCaseVisits.map((visit) => {
+                              const procedures = proceduresByVisitId[visit.id] || [];
+                              const photos = photosByVisitId[visit.id] || [];
+                              return (
+                                <article key={visit.id} className="visit-card">
+                                  <div className="visit-card__header">
+                                    <div>
+                                      <strong>{formatDate(visit.visited_on)}</strong>
+                                      <div className="chip-row">
+                                        {procedures.map((procedure) => (
+                                          <span
+                                            className={cx(
+                                              "pill",
+                                              getProcedureToneClass(procedure.procedure_type)
+                                            )}
+                                            key={procedure.id}
+                                          >
+                                            {PROCEDURE_LABELS[procedure.procedure_type]}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <div className="inline-actions">
+                                      <button
+                                        className="ghost-button"
+                                        type="button"
+                                        onClick={() => openVisitModal("edit", selectedCase.id, visit)}
+                                      >
+                                        編輯
+                                      </button>
+                                      <button
+                                        className="danger-button danger-button--ghost"
+                                        type="button"
+                                        onClick={() => handleDeleteVisit(visit)}
+                                      >
+                                        刪除
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {visit.summary ? <p>{visit.summary}</p> : null}
+                                  {visit.next_note ? (
+                                    <p className="muted-text">下次提醒：{visit.next_note}</p>
+                                  ) : null}
+                                  <div className="visit-card__footer">
+                                    <span>{photos.length} 張照片</span>
+                                    {visit.plan_step_id ? <span>來自計畫步驟</span> : null}
+                                  </div>
+                                </article>
+                              );
+                            })}
+                            {!selectedCaseVisits.length ? (
+                              <div className="empty-state">尚未建立回診紀錄。</div>
+                            ) : null}
+                          </div>
+                        </section>
+                      </section>
+
+                      <section className="panel">
+                        <div className="panel-heading">
+                          <div>
+                            <p className="eyebrow">Gallery</p>
+                            <h3>這個 Case（{selectedCaseToothLabel}）的照片總覽</h3>
+                          </div>
+                          <div className="inline-actions">
+                            <div className="compare-status">
+                              <span>Before: {photoTitle(caseBeforePhoto)}</span>
+                              <span>After: {photoTitle(caseAfterPhoto)}</span>
+                            </div>
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              disabled={!caseBeforePhoto || !caseAfterPhoto}
+                              onClick={() =>
+                                setCasePhotoCompare((current) => ({
+                                  ...current,
+                                  open: true
+                                }))
+                              }
+                            >
+                              查看 Before / After
+                            </button>
+                          </div>
+                        </div>
+                        {selectedCasePhotoGroups.length ? (
+                          <div className="visit-photo-groups">
+                            {selectedCasePhotoGroups.map((group) => (
+                              <section className="visit-photo-group" key={group.visit.id}>
+                                <div className="visit-photo-group__header">
+                                  <div>
+                                    <strong>{formatDate(group.visit.visited_on)}</strong>
+                                    <div className="chip-row">
+                                      {group.procedures.map((procedure) => (
+                                        <span
+                                          className={cx(
+                                            "pill",
+                                            getProcedureToneClass(procedure.procedure_type)
+                                          )}
+                                          key={procedure.id}
+                                        >
+                                          {PROCEDURE_LABELS[procedure.procedure_type]}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="visit-photo-group__meta">
+                                    <span>{group.photos.length} 張照片</span>
+                                    {group.visit.summary ? (
+                                      <span>{group.visit.summary}</span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <div className="photo-grid">
+                                  {group.photos.map((photo) => (
+                                    <article className="photo-card" key={photo.id}>
+                                      {photo.signed_url ? (
+                                        <button
+                                          className="photo-preview-trigger"
+                                          type="button"
+                                          onClick={() =>
+                                            setPhotoPreview({
+                                              open: true,
+                                              photoId: photo.id
+                                            })
+                                          }
+                                        >
+                                          <img src={photo.signed_url} alt={photo.file_name} />
+                                        </button>
+                                      ) : (
+                                        <div className="photo-placeholder">No preview</div>
+                                      )}
+                                      <div className="photo-card__body">
+                                        {photo.caption ? <p>{photo.caption}</p> : null}
+                                        <div className="photo-card__actions">
+                                          <button
+                                            className={cx(
+                                              "photo-action-button",
+                                              casePhotoCompare.before === photo.id &&
+                                                "is-selected-before"
+                                            )}
+                                            type="button"
+                                            onClick={() =>
+                                              setCasePhotoCompare((current) => ({
+                                                ...current,
+                                                before: photo.id
+                                              }))
+                                            }
+                                          >
+                                            Before
+                                          </button>
+                                          <button
+                                            className={cx(
+                                              "photo-action-button",
+                                              casePhotoCompare.after === photo.id &&
+                                                "is-selected-after"
+                                            )}
+                                            type="button"
+                                            onClick={() =>
+                                              setCasePhotoCompare((current) => ({
+                                                ...current,
+                                                after: photo.id
+                                              }))
+                                            }
+                                          >
+                                            After
+                                          </button>
+                                          <button
+                                            className="photo-action-button photo-action-button--delete"
+                                            type="button"
+                                            onClick={() => handleDeletePhoto(photo)}
+                                          >
+                                            刪除
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </article>
+                                  ))}
+                                </div>
+                              </section>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="empty-state">這個 case 還沒有照片。</div>
+                        )}
+                      </section>
+                    </>
+                  ) : (
+                    <section className="panel empty-state">請先選一個 case。</section>
+                  )}
+                </>
+              ) : (
+                <section className="panel empty-state">請先建立病患。</section>
+              )}
+            </section>
+          </section>
+        ) : null}
+
+        {activeView === "search" ? (
+          <section className="view-stack">
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Search</p>
+                  <h3>病患姓名或治療內容搜尋</h3>
+                </div>
+              </div>
+              <div className="toolbar-grid">
+                <label className="field field--full">
+                  <span>關鍵字</span>
+                  <input
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="病患姓名 / 牙位 / case 編號 / 備註"
+                  />
+                </label>
+                <div className="field field--full">
+                  <span>治療內容篩選</span>
+                  <PillSelect
+                    value={procedureFilter}
+                    options={procedureFilterOptions}
+                    onChange={setProcedureFilter}
+                    getToneClass={getProcedureToneClass}
+                  />
+                </div>
+              </div>
+
+              <div className="search-results">
+                {searchResults.map((entry) => {
+                  const patient = patientsById[entry.patient_id];
+                  const procedures = proceduresByCaseId[entry.id] || [];
+                  const nextStep = (planStepsByCaseId[entry.id] || [])
+                    .filter((step) => step.status === "pending")
+                    .sort((left, right) => {
+                      if (!left.planned_date) return 1;
+                      if (!right.planned_date) return -1;
+                      return left.planned_date.localeCompare(right.planned_date);
+                    })[0];
+
+                  return (
+                    <button
+                      className="search-card"
+                      key={entry.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPatientId(entry.patient_id);
+                        setSelectedCaseId(entry.id);
+                        setActiveView("patients");
+                      }}
+                    >
+                      <div className="search-card__header">
+                        <strong>{patient?.full_name || "Unknown patient"}</strong>
+                        <div className="chip-row">
+                          <span className="tag">#{caseDisplayNoById[entry.id]}</span>
+                          <span className="tag">{formatCaseToothLabel(entry)}</span>
+                        </div>
+                      </div>
+                      <div className="search-card__meta">
+                        {entry.template_key ? (
+                          <span>{TEMPLATE_LABELS[entry.template_key]}</span>
+                        ) : null}
+                        <span>{CASE_STATUS_LABELS[entry.status]}</span>
+                      </div>
+                      <div className="chip-row">
+                        {procedures.slice(0, 5).map((procedure) => (
+                          <span
+                            className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
+                            key={procedure.id}
+                          >
+                            {PROCEDURE_LABELS[procedure.procedure_type]}
+                          </span>
+                        ))}
+                      </div>
+                      {nextStep ? (
+                        <p className="muted-text">
+                          下次回診 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
+                        </p>
+                      ) : null}
+                    </button>
+                  );
+                })}
+
+                {!searchResults.length ? (
+                  <div className="empty-state">找不到符合條件的 case。</div>
+                ) : null}
+              </div>
+            </section>
+          </section>
+        ) : null}
+
+      </main>
+
+      <Modal
+        open={patientModal.open}
+        title={patientModal.mode === "create" ? "新增病患" : "編輯病患"}
+        subtitle="病患的注意事項會做成全域警示欄位。"
+        onClose={closePatientModal}
+      >
+        <form className="form-grid" onSubmit={handlePatientSubmit}>
+          <label className="field">
+            <span>姓名</span>
+            <input
+              required
+              value={patientModal.values.full_name}
+              onChange={(event) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, full_name: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>生日</span>
+            <DateInput
+              value={patientModal.values.birth_date}
+              onChange={(nextValue) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, birth_date: nextValue }
+                }))
+              }
+            />
+            {patientModal.values.birth_date ? (
+              <p className="muted-text">
+                自動計算年齡：{calculateAge(patientModal.values.birth_date) ?? "-"} 歲
+              </p>
+            ) : null}
+          </label>
+          <div className="field field--full">
+            <span>診所</span>
+            <PillSelect
+              value={patientModal.values.clinic_name}
+              options={clinicSelectionOptions}
+              onChange={(nextValue) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, clinic_name: nextValue }
+                }))
+              }
+            />
+          </div>
+          <label className="field field--full">
+            <span>注意事項</span>
+            <textarea
+              rows="3"
+              value={patientModal.values.attention_alert}
+              onChange={(event) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, attention_alert: event.target.value }
+                }))
+              }
+              placeholder="例如：高血壓、抗凝血藥物、藥物過敏..."
+            />
+          </label>
+          <label className="field field--full">
+            <span>一般備註</span>
+            <textarea
+              rows="4"
+              value={patientModal.values.general_notes}
+              onChange={(event) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, general_notes: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <div className="modal-actions">
+            <button className="secondary-button" type="button" onClick={closePatientModal}>
+              取消
+            </button>
+            <button className="primary-button" type="submit">
+              儲存病患
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={caseModal.open}
+        title={caseModal.mode === "create" ? "新增 Case" : "編輯 Case"}
+        subtitle={
+          caseModal.mode === "create"
+            ? "先選牙位（可複選），再選擇是否套用治療流程模板。"
+            : "編輯 case 基本資料與牙位。"
+        }
+        onClose={closeCaseModal}
+        width="xwide"
+      >
+        <form className="form-grid" onSubmit={handleCaseSubmit}>
+          {caseModal.mode === "create" ? (
+            <>
+              <div className="field field--full">
+                <span>選擇牙位（可複選，灰色 = 已有 Case）</span>
+                <ToothPicker
+                  value={caseModal.values.tooth_codes}
+                  multiple
+                  occupiedCodes={selectedPatientCaseToothCodes}
+                  onChange={(codes) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, tooth_codes: codes }
+                    }))
+                  }
+                />
+                <span className="muted-text">
+                  已選牙位：{formatCaseToothLabel(caseModal.values.tooth_codes)}
+                </span>
+              </div>
+
+              <div className="field field--full">
+                <div className="section-title-row section-title-row--stack">
+                  <span>治療流程模板（選填）</span>
+                  <button
+                    className={cx(
+                      "ghost-button",
+                      !caseModal.values.template_key && "is-active-soft"
+                    )}
+                    type="button"
+                    onClick={() =>
+                      setCaseModal((current) => ({
+                        ...current,
+                        values: { ...current.values, template_key: "" }
+                      }))
+                    }
+                  >
+                    不套模板
+                  </button>
+                </div>
+                <div className="template-card-list">
+                  {records.templates.map((template) => (
+                    <button
+                      key={template.key}
+                      className={cx(
+                        "template-card",
+                        caseModal.values.template_key === template.key && "is-selected"
+                      )}
+                      type="button"
+                      onClick={() =>
+                        setCaseModal((current) => ({
+                          ...current,
+                          values: {
+                            ...current.values,
+                            template_key: template.key,
+                            title: current.values.title || template.label
+                          }
+                        }))
+                      }
+                    >
+                      <strong>{template.label}</strong>
+                      <span>{TEMPLATE_FLOW_PREVIEWS[template.key] || template.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="field field--full">
+                <span>備註</span>
+                <textarea
+                  rows="4"
+                  value={caseModal.values.diagnosis_notes}
+                  onChange={(event) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, diagnosis_notes: event.target.value }
+                    }))
+                  }
+                  placeholder="初始狀況描述..."
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <div className="field">
+                <span>病患</span>
+                <div className="readonly-field">
+                  {patientsById[caseModal.values.patient_id]?.full_name || "未指定病患"}
+                </div>
+              </div>
+
+              <label className="field">
+                <span>Case 標題</span>
+                <input
+                  value={caseModal.values.title}
+                  onChange={(event) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, title: event.target.value }
+                    }))
+                  }
+                  placeholder="例如：#36 implant rehab"
+                />
+              </label>
+
+              <div className="field field--full">
+                <span>Status</span>
+                <PillSelect
+                  value={caseModal.values.status}
+                  options={CASE_STATUS_OPTIONS}
+                  onChange={(nextValue) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, status: nextValue }
+                    }))
+                  }
+                  getToneClass={getCaseStatusToneClass}
+                />
+              </div>
+
+              <label className="field">
+                <span>開始日期</span>
+                <DateInput
+                  value={caseModal.values.started_on}
+                  shortcuts={todayShortcuts}
+                  onChange={(nextValue) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, started_on: nextValue }
+                    }))
+                  }
+                />
+              </label>
+
+              <div className="field field--full">
+                <span>牙位</span>
+                <ToothPicker
+                  value={caseModal.values.tooth_codes}
+                  multiple
+                  occupiedCodes={selectedPatientCaseToothCodes}
+                  allowOccupiedValue
+                  onChange={(codes) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, tooth_codes: codes }
+                    }))
+                  }
+                />
+                <span className="muted-text">
+                  已選牙位：{formatCaseToothLabel(caseModal.values.tooth_codes)}
+                </span>
+              </div>
+
+              <label className="field field--full">
+                <span>初診備註</span>
+                <textarea
+                  rows="3"
+                  value={caseModal.values.diagnosis_notes}
+                  onChange={(event) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, diagnosis_notes: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="field field--full">
+                <span>內部備註</span>
+                <textarea
+                  rows="3"
+                  value={caseModal.values.internal_notes}
+                  onChange={(event) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, internal_notes: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+            </>
+          )}
+
+          <div className="modal-actions">
+            <button className="secondary-button" type="button" onClick={closeCaseModal}>
+              取消
+            </button>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={!caseModal.values.tooth_codes?.length || !caseModal.values.patient_id}
+            >
+              儲存 Case
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={planModal.open}
+        title={planModal.mode === "create" ? "新增治療計劃步驟" : "編輯治療計劃步驟"}
+        subtitle="可手動新增或調整治療計劃。"
+        onClose={closePlanModal}
+      >
+        <form className="form-grid" onSubmit={handlePlanSubmit}>
+          <div className="field field--full">
+            <span>治療內容</span>
+            <PillSelect
+              value={planModal.values.procedure_type}
+              options={PROCEDURE_OPTIONS}
+              onChange={(nextValue) =>
+                setPlanModal((current) => ({
+                  ...current,
+                  values: {
+                    ...current.values,
+                    procedure_type: nextValue,
+                    title: PROCEDURE_LABELS[nextValue] || nextValue
+                  }
+                }))
+              }
+              getToneClass={getProcedureToneClass}
+            />
+          </div>
+          <label className="field">
+            <span>預計日期</span>
+            <DateInput
+              value={planModal.values.planned_date}
+              shortcuts={followUpShortcuts}
+              onChange={(nextValue) =>
+                setPlanModal((current) => ({
+                  ...current,
+                  values: { ...current.values, planned_date: nextValue }
+                }))
+              }
+            />
+          </label>
+          <label className="field field--full">
+            <span>備註</span>
+            <textarea
+              rows="3"
+              value={planModal.values.note}
+              onChange={(event) =>
+                setPlanModal((current) => ({
+                  ...current,
+                  values: { ...current.values, note: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <div className="modal-actions">
+            <button className="secondary-button" type="button" onClick={closePlanModal}>
+              取消
+            </button>
+            <button className="primary-button" type="submit">
+              儲存計畫
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={visitModal.open}
+        title={visitModal.mode === "create" ? "新增回診紀錄" : "編輯回診紀錄"}
+        subtitle="可一次紀錄多個治療內容、植體細節、骨粉 / 再生膜與照片。"
+        onClose={closeVisitModal}
+        width="xwide"
+      >
+        <form className="form-grid" onSubmit={handleVisitSubmit}>
+          <label className="field">
+            <span>回診日期</span>
+            <DateInput
+              value={visitModal.values.visited_on}
+              shortcuts={todayShortcuts}
+              required
+              onChange={(nextValue) =>
+                setVisitModal((current) => ({
+                  ...current,
+                  values: { ...current.values, visited_on: nextValue }
+                }))
+              }
+            />
+          </label>
+          <div className="field field--full">
+            <span>關聯計畫步驟</span>
+            <div className="plan-step-selector">
+              <button
+                className={cx(
+                  "plan-step-option plan-step-option--none",
+                  !visitModal.values.plan_step_id && "is-active"
+                )}
+                type="button"
+                onClick={() =>
+                  setVisitModal((current) => ({
+                    ...current,
+                    values: { ...current.values, plan_step_id: "" }
+                  }))
+                }
+              >
+                <strong>不關聯計畫</strong>
+                <span>獨立新增回診紀錄</span>
+              </button>
+
+              {(planStepsByCaseId[visitModal.values.case_id] || []).map((step) => (
+                <button
+                  key={step.id}
+                  className={cx(
+                    "plan-step-option",
+                    visitModal.values.plan_step_id === step.id && "is-active"
+                  )}
+                  type="button"
+                  onClick={() =>
+                    setVisitModal((current) => ({
+                      ...current,
+                      values: { ...current.values, plan_step_id: step.id }
+                    }))
+                  }
+                >
+                  <div className="plan-step-option__header">
+                    <span className={cx("pill", getProcedureToneClass(step.procedure_type))}>
+                      {getPlanStepLabel(step)}
+                    </span>
+                    <span
+                      className={cx(
+                        "pill",
+                        step.status === "completed" && "pill--green",
+                        step.status === "pending" &&
+                          step.planned_date &&
+                          daysFromToday(step.planned_date) < 0 &&
+                          "pill--danger"
+                      )}
+                    >
+                      {PLAN_STATUS_LABELS[step.status]}
+                    </span>
+                  </div>
+                  <div className="plan-step-option__meta">
+                    <span>{step.planned_date ? formatDate(step.planned_date) : "未排日期"}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="field field--full">
+            <span>本次摘要</span>
+            <textarea
+              rows="3"
+              value={visitModal.values.summary}
+              onChange={(event) =>
+                setVisitModal((current) => ({
+                  ...current,
+                  values: { ...current.values, summary: event.target.value }
+                }))
+              }
+              placeholder="今天做了什麼、術中狀況、交代事項..."
+            />
+          </label>
+          <label className="field field--full">
+            <span>病患交代 / 追蹤提醒</span>
+            <textarea
+              rows="2"
+              value={visitModal.values.next_note}
+              onChange={(event) =>
+                setVisitModal((current) => ({
+                  ...current,
+                  values: { ...current.values, next_note: event.target.value }
+                }))
+              }
+            />
+          </label>
+
+          <div className="field field--full">
+            <div className="section-title-row">
+              <span>治療內容紀錄</span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() =>
+                  setVisitModal((current) => ({
+                    ...current,
+                    values: {
+                      ...current.values,
+                      procedures: current.values.procedures.concat(createEmptyProcedure())
+                    }
+                  }))
+                }
+              >
+                新增治療內容
+              </button>
+            </div>
+
+            <div className="procedure-stack">
+              {visitModal.values.procedures.map((procedure, index) => (
+                <article className="procedure-card" key={procedure.id || index}>
+                  <div className="section-title-row">
+                    <strong>治療內容 #{index + 1}</strong>
+                    {visitModal.values.procedures.length > 1 ? (
+                      <button
+                        className="danger-button danger-button--ghost"
+                        type="button"
+                        onClick={() =>
+                          setVisitModal((current) => ({
+                            ...current,
+                            values: {
+                              ...current.values,
+                              procedures: current.values.procedures.filter(
+                                (_entry, innerIndex) => innerIndex !== index
+                              )
+                            }
+                          }))
+                        }
+                      >
+                        刪除治療內容
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="toolbar-grid">
+                    <div className="field field--full">
+                      <span>治療內容</span>
+                      <PillSelect
+                        value={procedure.procedure_type}
+                        options={PROCEDURE_OPTIONS}
+                        onChange={(nextValue) =>
+                          setVisitModal((current) => ({
+                            ...current,
+                            values: {
+                              ...current.values,
+                              procedures: current.values.procedures.map((item, innerIndex) =>
+                                innerIndex === index
+                                  ? {
+                                      ...item,
+                                      procedure_type: nextValue
+                                    }
+                                  : item
+                              )
+                            }
+                          }))
+                        }
+                        getToneClass={getProcedureToneClass}
+                      />
+                    </div>
+
+                    <label className="field">
+                      <span>備註</span>
+                      <input
+                        value={procedure.procedure_note || ""}
+                        onChange={(event) =>
+                          setVisitModal((current) => ({
+                            ...current,
+                            values: {
+                              ...current.values,
+                              procedures: current.values.procedures.map((item, innerIndex) =>
+                                innerIndex === index
+                                  ? {
+                                      ...item,
+                                      procedure_note: event.target.value
+                                    }
+                                  : item
+                              )
+                            }
+                          }))
+                        }
+                        placeholder="治療內容補充說明"
+                      />
+                    </label>
+                  </div>
+
+                  {procedure.procedure_type === "implant_placement" ? (
+                    <div className="toolbar-grid">
+                      <label className="field">
+                        <span>植體廠牌</span>
+                        <input
+                          value={procedure.implant_brand || ""}
+                          onChange={(event) =>
+                            setVisitModal((current) => ({
+                              ...current,
+                              values: {
+                                ...current.values,
+                                procedures: current.values.procedures.map((item, innerIndex) =>
+                                  innerIndex === index
+                                    ? { ...item, implant_brand: event.target.value }
+                                    : item
+                                )
+                              }
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>植體型號</span>
+                        <input
+                          value={procedure.implant_model || ""}
+                          onChange={(event) =>
+                            setVisitModal((current) => ({
+                              ...current,
+                              values: {
+                                ...current.values,
+                                procedures: current.values.procedures.map((item, innerIndex) =>
+                                  innerIndex === index
+                                    ? { ...item, implant_model: event.target.value }
+                                    : item
+                                )
+                              }
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>直徑 (mm)</span>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={procedure.implant_diameter_mm || ""}
+                          onChange={(event) =>
+                            setVisitModal((current) => ({
+                              ...current,
+                              values: {
+                                ...current.values,
+                                procedures: current.values.procedures.map((item, innerIndex) =>
+                                  innerIndex === index
+                                    ? {
+                                        ...item,
+                                        implant_diameter_mm: event.target.value
+                                      }
+                                    : item
+                                )
+                              }
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>長度 (mm)</span>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={procedure.implant_length_mm || ""}
+                          onChange={(event) =>
+                            setVisitModal((current) => ({
+                              ...current,
+                              values: {
+                                ...current.values,
+                                procedures: current.values.procedures.map((item, innerIndex) =>
+                                  innerIndex === index
+                                    ? {
+                                        ...item,
+                                        implant_length_mm: event.target.value
+                                      }
+                                    : item
+                                )
+                              }
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  {["arp", "gbr", "sinus_lift"].includes(procedure.procedure_type) ? (
+                    <>
+                      <div className="field">
+                        <span>骨粉材料</span>
+                        <div className="checkbox-grid">
+                          {BONE_GRAFT_OPTIONS.map((option) => (
+                            <label className="checkbox" key={option}>
+                              <input
+                                type="checkbox"
+                                checked={procedure.bone_graft_materials?.includes(option)}
+                                onChange={(event) =>
+                                  setVisitModal((current) => ({
+                                    ...current,
+                                    values: {
+                                      ...current.values,
+                                      procedures: current.values.procedures.map((item, innerIndex) =>
+                                        innerIndex === index
+                                          ? {
+                                              ...item,
+                                              bone_graft_materials: event.target.checked
+                                                ? [...(item.bone_graft_materials || []), option]
+                                                : (item.bone_graft_materials || []).filter(
+                                                    (entry) => entry !== option
+                                                  )
+                                            }
+                                          : item
+                                      )
+                                    }
+                                  }))
+                                }
+                              />
+                              <span>{option}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="toolbar-grid">
+                        <div className="field field--full">
+                          <span>再生膜</span>
+                          <PillSelect
+                            value={procedure.membrane_type || ""}
+                            options={membraneSelectionOptions}
+                            onChange={(nextValue) =>
+                              setVisitModal((current) => ({
+                                ...current,
+                                values: {
+                                  ...current.values,
+                                  procedures: current.values.procedures.map((item, innerIndex) =>
+                                    innerIndex === index
+                                      ? {
+                                          ...item,
+                                          membrane_type: nextValue
+                                        }
+                                      : item
+                                  )
+                                }
+                              }))
+                            }
+                            getToneClass={getMembraneToneClass}
+                          />
+                        </div>
+                        <label className="field">
+                          <span>再生膜補充</span>
+                          <input
+                            value={procedure.membrane_note || ""}
+                            onChange={(event) =>
+                              setVisitModal((current) => ({
+                                ...current,
+                                values: {
+                                  ...current.values,
+                                  procedures: current.values.procedures.map((item, innerIndex) =>
+                                    innerIndex === index
+                                      ? {
+                                          ...item,
+                                          membrane_note: event.target.value
+                                        }
+                                      : item
+                                  )
+                                }
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {procedure.procedure_type === "sinus_lift" ? (
+                    <label className="field">
+                      <span>Sinus Lift 方式</span>
+                      <select
+                        value={procedure.sinus_lift_approach || ""}
+                        onChange={(event) =>
+                          setVisitModal((current) => ({
+                            ...current,
+                            values: {
+                              ...current.values,
+                              procedures: current.values.procedures.map((item, innerIndex) =>
+                                innerIndex === index
+                                  ? {
+                                      ...item,
+                                      sinus_lift_approach: event.target.value
+                                    }
+                                  : item
+                              )
+                            }
+                          }))
+                        }
+                      >
+                        <option value="">未設定</option>
+                        {SINUS_LIFT_APPROACH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </div>
+
+          <div className="field field--full">
+            <div className="section-title-row">
+              <span>照片</span>
+              <label className="secondary-button secondary-button--file">
+                上傳照片
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  onChange={(event) => {
+                    pushNewPhotoDrafts(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+
+            {visitModal.values.existing_photos.length ? (
+              <div className="photo-draft-grid">
+                {visitModal.values.existing_photos.map((photo, index) => (
+                  <article
+                    key={photo.id}
+                    className={cx("photo-draft-card", photo.marked_for_delete && "is-dim")}
+                  >
+                    {photo.signed_url ? (
+                      <button
+                        className="photo-draft-trigger"
+                        type="button"
+                        onClick={() => openDraftPhotoEditor("existing", index)}
+                      >
+                        <img src={photo.signed_url} alt={photo.file_name} />
+                      </button>
+                    ) : null}
+                    <div className="photo-draft-card__summary">
+                      <div className="chip-row">
+                        <span className={cx("pill", getPhotoLabelToneClass(photo.photo_label || ""))}>
+                          {photo.photo_label || "未標記"}
+                        </span>
+                        <span className="muted-text">
+                          {photo.caption ? "已填說明" : "點圖片補標籤"}
+                        </span>
+                      </div>
+                      <div className="inline-actions">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={() => openDraftPhotoEditor("existing", index)}
+                        >
+                          編輯照片
+                        </button>
+                        <button
+                          className="danger-button danger-button--ghost"
+                          type="button"
+                          onClick={() => toggleExistingPhotoDelete(index)}
+                        >
+                          {photo.marked_for_delete ? "取消刪除" : "刪除此照片"}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
+            {visitModal.values.new_photos.length ? (
+              <div className="photo-draft-grid">
+                {visitModal.values.new_photos.map((photo, index) => (
+                  <article className="photo-draft-card" key={photo.local_id}>
+                    <button
+                      className="photo-draft-trigger"
+                      type="button"
+                      onClick={() => openDraftPhotoEditor("new", index)}
+                    >
+                      <img src={photo.preview_url} alt={photo.file.name} />
+                    </button>
+                    <div className="photo-draft-card__summary">
+                      <div className="chip-row">
+                        <span className={cx("pill", getPhotoLabelToneClass(photo.photo_label || ""))}>
+                          {photo.photo_label || "未標記"}
+                        </span>
+                        <span className="muted-text">
+                          {photo.caption ? "已填說明" : "點圖片補標籤"}
+                        </span>
+                      </div>
+                      <div className="inline-actions">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={() => openDraftPhotoEditor("new", index)}
+                        >
+                          編輯照片
+                        </button>
+                        <button
+                          className="danger-button danger-button--ghost"
+                          type="button"
+                          onClick={() => removeNewPhotoDraft(index)}
+                        >
+                          移除此檔案
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">尚未新增照片。</div>
+            )}
+          </div>
+
+          <div className="field field--full">
+            <div className="section-title-row section-title-row--stack">
+              <span>下次安排</span>
+              <PillSelect
+                value={visitModal.values.next_plan_enabled ? "on" : "off"}
+                options={nextPlanModeOptions}
+                onChange={(nextValue) =>
+                  setVisitModal((current) => ({
+                    ...current,
+                    values: {
+                      ...current.values,
+                      next_plan_enabled: nextValue === "on",
+                      next_plan_procedure_type:
+                        nextValue === "on"
+                          ? current.values.next_plan_procedure_type ||
+                            current.values.procedures[0]?.procedure_type ||
+                            "follow_up"
+                          : current.values.next_plan_procedure_type,
+                      next_plan_planned_date:
+                        nextValue === "on"
+                          ? current.values.next_plan_planned_date ||
+                            addDays(current.values.visited_on || todayIso(), 14)
+                          : current.values.next_plan_planned_date
+                    }
+                  }))
+                }
+                getToneClass={(value) => (value === "on" ? "pill--sage" : "pill--stone")}
+              />
+            </div>
+
+            {visitModal.values.next_plan_enabled ? (
+              <div className="next-plan-card">
+                <label className="field">
+                  <span>下次日期</span>
+                  <DateInput
+                    value={visitModal.values.next_plan_planned_date}
+                    shortcuts={followUpShortcuts}
+                    onChange={(nextValue) =>
+                      setVisitModal((current) => ({
+                        ...current,
+                        values: { ...current.values, next_plan_planned_date: nextValue }
+                      }))
+                    }
+                  />
+                </label>
+                <div className="field field--full">
+                  <span>下次治療內容</span>
+                  <PillSelect
+                    value={visitModal.values.next_plan_procedure_type}
+                    options={PROCEDURE_OPTIONS}
+                    onChange={(nextValue) =>
+                      setVisitModal((current) => ({
+                        ...current,
+                        values: { ...current.values, next_plan_procedure_type: nextValue }
+                      }))
+                    }
+                    getToneClass={getProcedureToneClass}
+                  />
+                </div>
+                <label className="field field--full">
+                  <span>計劃備註</span>
+                  <textarea
+                    rows="2"
+                    value={visitModal.values.next_plan_note}
+                    onChange={(event) =>
+                      setVisitModal((current) => ({
+                        ...current,
+                        values: { ...current.values, next_plan_note: event.target.value }
+                      }))
+                    }
+                    placeholder="下次要特別準備或提醒的內容"
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="modal-actions">
+            <button className="secondary-button" type="button" onClick={closeVisitModal}>
+              取消
+            </button>
+            <button className="primary-button" type="submit">
+              儲存回診
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={casePhotoCompare.open}
+        title="Before / After"
+        subtitle={`比較 ${selectedCaseToothHeading} 在不同回診或不同階段的照片。`}
+        onClose={() =>
+          setCasePhotoCompare((current) => ({
+            ...current,
+            open: false
+          }))
+        }
+        width="xwide"
+      >
+        {caseBeforePhoto?.signed_url && caseAfterPhoto?.signed_url ? (
+          <div className="compare-view">
+            <div className="compare-view__grid">
+              {[
+                { label: "Before", photo: caseBeforePhoto },
+                { label: "After", photo: caseAfterPhoto }
+              ].map(({ label, photo }) => (
+                <article className="compare-view__panel" key={label}>
+                  <div className="compare-view__image-frame">
+                    <img
+                      className="compare-view__image"
+                      src={photo.signed_url}
+                      alt={photoTitle(photo)}
+                    />
+                  </div>
+                  <span className="compare-view__badge">{label}</span>
+                </article>
+              ))}
+            </div>
+
+            <div className="compare-view__meta-grid">
+              {[
+                { label: "Before", photo: caseBeforePhoto },
+                { label: "After", photo: caseAfterPhoto }
+              ].map(({ label, photo }) => {
+                const visit = visitsById[photo.visit_id];
+                const procedures = visit ? proceduresByVisitId[visit.id] || [] : [];
+
+                return (
+                  <article className="compare-view__meta-card" key={label}>
+                    <strong>{label}</strong>
+                    <span>{photoTitle(photo)}</span>
+                    <span>{visit?.visited_on ? formatDate(visit.visited_on) : "未指定回診"}</span>
+                    <div className="chip-row">
+                      {procedures.map((procedure) => (
+                        <span
+                          className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
+                          key={procedure.id}
+                        >
+                          {PROCEDURE_LABELS[procedure.procedure_type]}
+                        </span>
+                      ))}
+                    </div>
+                    {photo.caption ? <p>{photo.caption}</p> : null}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">請先選擇 Before 與 After 照片。</div>
+        )}
+      </Modal>
+
+      <Modal
+        open={draftPhotoEditor.open && Boolean(activeDraftPhoto)}
+        title="編輯照片"
+        subtitle="先看圖，再補標籤與說明。"
+        onClose={closeDraftPhotoEditor}
+        width="wide"
+      >
+        {activeDraftPhoto ? (
+          <div className="photo-lightbox">
+            <div className="photo-lightbox__frame">
+              <img
+                className="photo-lightbox__image"
+                src={activeDraftPhoto.signed_url || activeDraftPhoto.preview_url}
+                alt={activeDraftPhoto.file_name || activeDraftPhoto.file?.name || "Clinical Photo"}
+              />
+            </div>
+            <div className="field field--full">
+              <span>快速標籤</span>
+              <PillSelect
+                value={activeDraftPhoto.photo_label || ""}
+                options={photoLabelSelectionOptions}
+                onChange={(nextValue) =>
+                  updateDraftPhoto(draftPhotoEditor.kind, draftPhotoEditor.index, {
+                    photo_label: nextValue
+                  })
+                }
+                getToneClass={getPhotoLabelToneClass}
+              />
+            </div>
+            <label className="field field--full">
+              <span>說明</span>
+              <textarea
+                rows="3"
+                value={activeDraftPhoto.caption || ""}
+                onChange={(event) =>
+                  updateDraftPhoto(draftPhotoEditor.kind, draftPhotoEditor.index, {
+                    caption: event.target.value
+                  })
+                }
+              />
+            </label>
+            <div className="modal-actions">
+              <button className="secondary-button" type="button" onClick={closeDraftPhotoEditor}>
+                完成
+              </button>
+              {draftPhotoEditor.kind === "existing" ? (
+                <button
+                  className="danger-button danger-button--ghost"
+                  type="button"
+                  onClick={() => toggleExistingPhotoDelete(draftPhotoEditor.index)}
+                >
+                  {activeDraftPhoto.marked_for_delete ? "取消刪除" : "刪除此照片"}
+                </button>
+              ) : (
+                <button
+                  className="danger-button danger-button--ghost"
+                  type="button"
+                  onClick={() => removeNewPhotoDraft(draftPhotoEditor.index)}
+                >
+                  移除此檔案
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">目前沒有可編輯的照片。</div>
+        )}
+      </Modal>
+
+      <Modal
+        open={photoPreview.open}
+        title="照片預覽"
+        subtitle="點照片可放大查看完整畫面。"
+        onClose={() =>
+          setPhotoPreview({
+            open: false,
+            photoId: ""
+          })
+        }
+        width="xwide"
+      >
+        {previewPhoto?.signed_url ? (
+          <div className="photo-lightbox">
+            <div className="photo-lightbox__frame">
+              <img className="photo-lightbox__image" src={previewPhoto.signed_url} alt={photoTitle(previewPhoto)} />
+            </div>
+            <div className="photo-lightbox__meta">
+              <strong>{previewPhotoVisit?.visited_on ? formatDate(previewPhotoVisit.visited_on) : "未指定回診"}</strong>
+              <div className="chip-row">
+                {previewPhotoProcedures.map((procedure) => (
+                  <span className={cx("pill", getProcedureToneClass(procedure.procedure_type))} key={procedure.id}>
+                    {PROCEDURE_LABELS[procedure.procedure_type]}
+                  </span>
+                ))}
+              </div>
+              {previewPhoto.caption ? <p>{previewPhoto.caption}</p> : null}
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">目前沒有可預覽的照片。</div>
+        )}
+      </Modal>
+    </div>
+  );
+}
