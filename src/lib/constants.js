@@ -130,7 +130,7 @@ export const HEALING_SIZE_OPTIONS = [
   { value: "5.5x4", label: "5.5x4" },
   { value: "5.5x5", label: "5.5x5" },
   { value: "5.5x6", label: "5.5x6" },
-  { value: "6.2", label: "6.2" },
+  { value: "6x2", label: "6x2" },
   { value: "6x4", label: "6x4" },
   { value: "6x6", label: "6x6" },
   { value: "7x7", label: "7x7" }

@@ -1355,9 +1355,7 @@ img {
 
 .implant-healing-panel__header {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
   gap: 8px 12px;
 }
 
@@ -1365,9 +1363,23 @@ img {
   font-size: 0.98rem;
 }
 
-.implant-healing-panel__header span {
+.implant-healing-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.implant-healing-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 12px;
+}
+
+.implant-healing-row__label {
+  padding-top: 9px;
+  font-size: 0.9rem;
+  font-weight: 700;
   color: var(--muted);
-  font-size: 0.86rem;
 }
 
 .readonly-field {
@@ -1726,6 +1738,15 @@ img {
   .implant-healing-panel {
     padding: 14px;
     gap: 12px;
+  }
+
+  .implant-healing-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .implant-healing-row__label {
+    padding-top: 0;
   }
 
   .pill-select--dense {

@@ -611,9 +611,24 @@ export default function App() {
     .filter((entry) => entry.diffDays !== null && entry.diffDays < 0)
     .sort((left, right) => left.diffDays - right.diffDays);
 
-  const upcomingItems = pendingPlanSteps
-    .filter((entry) => entry.diffDays !== null && entry.diffDays >= 0 && entry.diffDays <= 30)
-    .sort((left, right) => left.diffDays - right.diffDays);
+  const upcomingItems = (() => {
+    const seenCaseKeys = new Set();
+
+    return pendingPlanSteps
+      .filter((entry) => entry.diffDays !== null && entry.diffDays >= 0)
+      .sort((left, right) => left.diffDays - right.diffDays)
+      .filter((entry) => {
+        const toothKey = getCaseToothCodes(entry.caseEntry).join("|");
+        const upcomingKey = `${entry.patient.id}::${toothKey}`;
+
+        if (seenCaseKeys.has(upcomingKey)) {
+          return false;
+        }
+
+        seenCaseKeys.add(upcomingKey);
+        return true;
+      });
+  })();
 
   const stats = {
     totalCases: records.cases.length,
@@ -621,19 +636,6 @@ export default function App() {
     totalPatients: records.patients.length,
     totalPhotos: records.visitPhotos.length
   };
-  const nextFocusItem = overdueItems[0] || upcomingItems[0] || null;
-  const overviewHeadline = overdueItems.length
-    ? `目前有 ${overdueItems.length} 個逾期 case 要優先追蹤`
-    : upcomingItems.length
-      ? `接下來 30 天有 ${upcomingItems.length} 位病患待回診`
-      : "目前沒有逾期或即將回診的病患";
-  const overviewDetail = nextFocusItem
-    ? `${nextFocusItem.patient.full_name} · ${formatCaseToothLabel(nextFocusItem.caseEntry, {
-        withPrefix: true
-      })} · ${
-        getPlanStepLabel(nextFocusItem)
-      }${nextFocusItem.planned_date ? ` · ${formatDate(nextFocusItem.planned_date)}` : ""}`
-    : "今天可以把重點放在新增病患、建立 case 或補齊回診紀錄。";
   const procedureFilterOptions = [
     { value: "", label: "全部治療內容" },
     ...PROCEDURE_OPTIONS
@@ -644,6 +646,15 @@ export default function App() {
     value: option,
     label: option
   }))];
+  const healingSizeGroups = Array.from(
+    HEALING_SIZE_OPTIONS.reduce((groupMap, option) => {
+      const groupLabel = option.value.includes("x") ? option.value.split("x")[0] : option.value;
+      const groupItems = groupMap.get(groupLabel) || [];
+      groupItems.push(option);
+      groupMap.set(groupLabel, groupItems);
+      return groupMap;
+    }, new Map())
+  );
   const nextPlanModeOptions = [
     { value: "off", label: "先不安排" },
     { value: "on", label: "安排下次" }
@@ -836,7 +847,10 @@ export default function App() {
           sinus_lift_approach: procedure.sinus_lift_approach || "",
           extra_data: {
             healing_used: Boolean(procedure.extra_data?.healing_used),
-            healing_size: procedure.extra_data?.healing_size || ""
+            healing_size:
+              procedure.extra_data?.healing_size === "6.2"
+                ? "6x2"
+                : procedure.extra_data?.healing_size || ""
           }
         }))
       : [createEmptyProcedure(planStep?.procedure_type || "consultation")];
@@ -1812,27 +1826,6 @@ export default function App() {
       <main className="page">
         {activeView === "dashboard" ? (
           <section className="view-stack">
-            <div className="hero-panel">
-              <div className="hero-panel__content">
-                <p className="eyebrow">Today</p>
-                <h2>{overviewHeadline}</h2>
-                <p className="muted-text">{overviewDetail}</p>
-                <div className="hero-panel__highlights">
-                  <span className="tag">逾期 {overdueItems.length}</span>
-                  <span className="tag">即將回診 {upcomingItems.length}</span>
-                  <span className="tag">進行中 {stats.activeCases}</span>
-                </div>
-              </div>
-              <div className="hero-panel__status">
-                <span className="status-dot status-dot--ok" />
-                {loadingData
-                  ? "同步中"
-                  : lastSyncedAt
-                    ? `更新於 ${formatDateTime(lastSyncedAt)}`
-                    : "資料已同步"}
-              </div>
-            </div>
-
             <section className="stats-grid">
               <article className="stat-card">
                 <span className="stat-value">{stats.totalCases}</span>
@@ -1853,6 +1846,50 @@ export default function App() {
             </section>
 
             <section className="dual-columns">
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Upcoming</p>
+                    <h3>即將回診</h3>
+                  </div>
+                </div>
+                {upcomingItems.length ? (
+                  <div className="agenda-list">
+                    {upcomingItems.map((item) => (
+                      <button
+                        key={item.id}
+                        className="agenda-item"
+                        type="button"
+                        onClick={() => {
+                          setActiveView("patients");
+                          setSelectedPatientId(item.patient.id);
+                          setSelectedCaseId(item.caseEntry.id);
+                        }}
+                      >
+                        <div className="calendar-chip calendar-chip--soft">
+                          <span>{formatShortMonthDay(item.planned_date).month}</span>
+                          <strong>{formatShortMonthDay(item.planned_date).day}</strong>
+                        </div>
+                        <div className="agenda-item__body">
+                          <div className="agenda-item__row">
+                            <strong>{item.patient.full_name}</strong>
+                            <span className="tag">{formatCaseToothLabel(item.caseEntry)}</span>
+                          </div>
+                          <div className="agenda-item__row">
+                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                              {getPlanStepLabel(item)}
+                            </span>
+                            <span className="muted-text">{formatDate(item.planned_date)}</span>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">目前沒有待回診病患。</div>
+                )}
+              </section>
+
               <section className="panel">
                 <div className="panel-heading panel-heading--danger">
                   <div>
@@ -1897,50 +1934,6 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="empty-state">目前沒有逾期個案。</div>
-                )}
-              </section>
-
-              <section className="panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Upcoming</p>
-                    <h3>即將回診</h3>
-                  </div>
-                </div>
-                {upcomingItems.length ? (
-                  <div className="agenda-list">
-                    {upcomingItems.map((item) => (
-                      <button
-                        key={item.id}
-                        className="agenda-item"
-                        type="button"
-                        onClick={() => {
-                          setActiveView("patients");
-                          setSelectedPatientId(item.patient.id);
-                          setSelectedCaseId(item.caseEntry.id);
-                        }}
-                      >
-                        <div className="calendar-chip calendar-chip--soft">
-                          <span>{formatShortMonthDay(item.planned_date).month}</span>
-                          <strong>{formatShortMonthDay(item.planned_date).day}</strong>
-                        </div>
-                        <div className="agenda-item__body">
-                          <div className="agenda-item__row">
-                            <strong>{item.patient.full_name}</strong>
-                            <span className="tag">{formatCaseToothLabel(item.caseEntry)}</span>
-                          </div>
-                          <div className="agenda-item__row">
-                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                              {getPlanStepLabel(item)}
-                            </span>
-                            <span className="muted-text">{formatDate(item.planned_date)}</span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state">接下來 30 天沒有待回診病患。</div>
                 )}
               </section>
             </section>
@@ -3270,24 +3263,39 @@ export default function App() {
                         <div className="implant-healing-panel field--full">
                           <div className="implant-healing-panel__header">
                             <strong>Healing Size</strong>
-                            <span>尺寸較多，集中在這裡選會比較清楚。</span>
                           </div>
-                          <PillSelect
-                            className="pill-select--dense"
-                            value={procedure.extra_data?.healing_size || ""}
-                            options={HEALING_SIZE_OPTIONS}
-                            onChange={(nextValue) =>
-                              updateVisitProcedureAt(index, (item) => ({
-                                ...item,
-                                extra_data: {
-                                  ...item.extra_data,
-                                  healing_used: true,
-                                  healing_size: nextValue
-                                }
-                              }))
-                            }
-                            getToneClass={() => "pill--lavender"}
-                          />
+                          <div className="implant-healing-groups">
+                            {healingSizeGroups.map(([groupLabel, groupOptions]) => (
+                              <div className="implant-healing-row" key={groupLabel}>
+                                <span className="implant-healing-row__label">{groupLabel}</span>
+                                <div className="pill-select pill-select--dense">
+                                  {groupOptions.map((option) => (
+                                    <button
+                                      key={option.value}
+                                      className={cx(
+                                        "pill-option",
+                                        "pill--lavender",
+                                        procedure.extra_data?.healing_size === option.value && "is-active"
+                                      )}
+                                      type="button"
+                                      onClick={() =>
+                                        updateVisitProcedureAt(index, (item) => ({
+                                          ...item,
+                                          extra_data: {
+                                            ...item.extra_data,
+                                            healing_used: true,
+                                            healing_size: option.value
+                                          }
+                                        }))
+                                      }
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       ) : null}
                     </div>
