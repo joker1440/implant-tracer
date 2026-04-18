@@ -75,6 +75,14 @@ function normalizeText(value) {
   return nextValue ? nextValue : null;
 }
 
+function createClientId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function numberOrNull(value) {
   if (value === "" || value === null || value === undefined) {
     return null;
@@ -245,6 +253,15 @@ export default function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  function getNextPlanStepOrder(stepEntries) {
+    return (
+      (stepEntries || []).reduce(
+        (maxOrder, step) => Math.max(maxOrder, Number(step.step_order) || 0),
+        0
+      ) + 1
+    );
+  }
 
   async function loadAppData() {
     if (!session?.user || !supabase) {
@@ -605,6 +622,7 @@ export default function App() {
   ];
   const todayDate = todayIso();
   const todayShortcuts = [{ label: "今天", value: todayDate }];
+  const visitFollowUpBaseDate = visitModal.values.visited_on || todayDate;
   const followUpShortcuts = [
     { label: "今天", value: todayDate },
     { label: "+1M", value: addMonths(todayDate, 1) },
@@ -612,6 +630,14 @@ export default function App() {
     { label: "+3M", value: addMonths(todayDate, 3) },
     { label: "+4M", value: addMonths(todayDate, 4) },
     { label: "+6M", value: addMonths(todayDate, 6) }
+  ];
+  const visitFollowUpShortcuts = [
+    { label: "當天", value: visitFollowUpBaseDate },
+    { label: "+1M", value: addMonths(visitFollowUpBaseDate, 1) },
+    { label: "+2M", value: addMonths(visitFollowUpBaseDate, 2) },
+    { label: "+3M", value: addMonths(visitFollowUpBaseDate, 3) },
+    { label: "+4M", value: addMonths(visitFollowUpBaseDate, 4) },
+    { label: "+6M", value: addMonths(visitFollowUpBaseDate, 6) }
   ];
 
   const searchText = deferredSearchQuery.trim().toLowerCase();
@@ -1133,14 +1159,14 @@ export default function App() {
         planned_date: planModal.values.planned_date || null,
         step_order: 0
       };
-      const nextOrderedSteps = currentCaseSteps.concat(provisionalStep).sort(comparePlanStepsByTimeline);
-      const computedStepOrder =
-        nextOrderedSteps.findIndex((step) => step.id === provisionalStep.id) + 1;
 
       const payload = {
         owner_user_id: session.user.id,
         case_id: planModal.values.case_id,
-        step_order: computedStepOrder,
+        step_order:
+          planModal.mode === "edit"
+            ? provisionalStep.step_order || getNextPlanStepOrder(currentCaseSteps)
+            : getNextPlanStepOrder(currentCaseSteps),
         title: PROCEDURE_LABELS[planModal.values.procedure_type] || planModal.values.procedure_type,
         procedure_type: planModal.values.procedure_type,
         planned_date: planModal.values.planned_date || null,
@@ -1156,20 +1182,6 @@ export default function App() {
       const { data: savedStep, error } = await request;
       if (error) {
         throw error;
-      }
-
-      const normalizedSteps = currentCaseSteps
-        .concat(savedStep)
-        .sort(comparePlanStepsByTimeline)
-        .map((step, index) => ({ id: step.id, step_order: index + 1 }))
-        .filter((step) => step.id !== savedStep.id || step.step_order !== savedStep.step_order);
-
-      if (normalizedSteps.length) {
-        await Promise.all(
-          normalizedSteps.map((step) =>
-            supabase.from("case_plan_steps").update({ step_order: step.step_order }).eq("id", step.id)
-          )
-        );
       }
 
       closePlanModal();
@@ -1200,15 +1212,7 @@ export default function App() {
       }
 
       if (deletedStep?.case_id) {
-        const remainingSteps = (planStepsByCaseId[deletedStep.case_id] || [])
-          .filter((step) => step.id !== stepId)
-          .sort(comparePlanStepsByTimeline);
-
-        await Promise.all(
-          remainingSteps.map((step, index) =>
-            supabase.from("case_plan_steps").update({ step_order: index + 1 }).eq("id", step.id)
-          )
-        );
+        // Keep existing step_order values as a stable tiebreaker; timeline is sorted by planned_date.
       }
 
       await loadAppData();
@@ -1220,8 +1224,12 @@ export default function App() {
   }
 
   function pushNewPhotoDrafts(fileList) {
+    if (!fileList?.length) {
+      return;
+    }
+
     const nextDrafts = Array.from(fileList || []).map((file) => ({
-      local_id: crypto.randomUUID(),
+      local_id: createClientId(),
       file,
       caption: "",
       photo_label: "",
@@ -1238,21 +1246,19 @@ export default function App() {
     }));
   }
 
-  async function uploadVisitPhotos(visitId, caseId, drafts) {
+  async function uploadVisitPhotos(visitId, caseId, patientId, drafts) {
     if (!supabase || !session?.user || !drafts.length) {
       return;
     }
 
-    const caseEntry = casesById[caseId];
-    const patientId = caseEntry?.patient_id;
     if (!patientId) {
-      return;
+      throw new Error("找不到病患資料，無法上傳照片。");
     }
 
     for (const [index, draft] of drafts.entries()) {
       const extension = draft.file.name.split(".").pop() || "jpg";
       const safeName = slugifyFileName(
-        `${crypto.randomUUID()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
+        `${createClientId()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
       );
       const storagePath = `${session.user.id}/${patientId}/${caseId}/${visitId}/${safeName}`;
 
@@ -1295,14 +1301,27 @@ export default function App() {
       setBusyLabel(visitModal.mode === "create" ? "建立回診中" : "更新回診中");
       setErrorMessage("");
 
+      const visitDraft = {
+        ...visitModal.values,
+        procedures: visitModal.values.procedures.map((procedure) => ({
+          ...procedure,
+          bone_graft_materials: [...(procedure.bone_graft_materials || [])],
+          extra_data: procedure.extra_data || {}
+        })),
+        existing_photos: visitModal.values.existing_photos.map((photo) => ({ ...photo })),
+        new_photos: visitModal.values.new_photos.map((photo) => ({ ...photo }))
+      };
+
       const visitPayload = {
         owner_user_id: session.user.id,
-        case_id: visitModal.values.case_id,
-        plan_step_id: visitModal.values.plan_step_id || null,
-        visited_on: visitModal.values.visited_on,
-        summary: normalizeText(visitModal.values.summary),
-        next_note: normalizeText(visitModal.values.next_note)
+        case_id: visitDraft.case_id,
+        plan_step_id: visitDraft.plan_step_id || null,
+        visited_on: visitDraft.visited_on,
+        summary: normalizeText(visitDraft.summary),
+        next_note: normalizeText(visitDraft.next_note)
       };
+      const caseEntry = casesById[visitDraft.case_id];
+      const patientId = caseEntry?.patient_id || selectedPatientId;
 
       let visitId = visitModal.visitId;
 
@@ -1335,7 +1354,7 @@ export default function App() {
         throw deleteProceduresError;
       }
 
-      const normalizedProcedures = visitModal.values.procedures
+      const normalizedProcedures = visitDraft.procedures
         .filter((procedure) => procedure.procedure_type)
         .map((procedure, index) => ({
           owner_user_id: session.user.id,
@@ -1363,24 +1382,93 @@ export default function App() {
         }
       }
 
-      const photosToDelete = visitModal.values.existing_photos.filter(
-        (photo) => photo.marked_for_delete
-      );
+      closeVisitModal();
+      await loadAppData();
+
+      let backgroundError = "";
+
+      try {
+        if (visitDraft.plan_step_id) {
+          const { error } = await supabase
+            .from("case_plan_steps")
+            .update({
+              status: "completed",
+              completed_visit_id: visitId,
+              completed_at: new Date().toISOString()
+            })
+            .eq("id", visitDraft.plan_step_id);
+          if (error) {
+            throw error;
+          }
+        }
+
+        if (
+          visitDraft.next_plan_enabled &&
+          visitDraft.next_plan_procedure_type &&
+          visitDraft.next_plan_planned_date
+        ) {
+          const currentCaseSteps = (planStepsByCaseId[visitDraft.case_id] || []).filter(
+            (step) =>
+              step.id !== visitDraft.plan_step_id && step.id !== visitDraft.next_plan_step_id
+          );
+          const provisionalNextStep = {
+            id: visitDraft.next_plan_step_id || `next-${Date.now()}`,
+            case_id: visitDraft.case_id,
+            planned_date: visitDraft.next_plan_planned_date,
+            procedure_type: visitDraft.next_plan_procedure_type,
+            status: "pending",
+            note: visitDraft.next_plan_note || "",
+            step_order: 0
+          };
+          const orderedSteps = currentCaseSteps
+            .concat(provisionalNextStep)
+            .sort(comparePlanStepsByTimeline);
+          const nextPlanPayload = {
+            owner_user_id: session.user.id,
+            case_id: visitDraft.case_id,
+            step_order: visitDraft.next_plan_step_id
+              ? provisionalNextStep.step_order || getNextPlanStepOrder(currentCaseSteps)
+              : getNextPlanStepOrder(currentCaseSteps),
+            title:
+              PROCEDURE_LABELS[visitDraft.next_plan_procedure_type] ||
+              visitDraft.next_plan_procedure_type,
+            procedure_type: visitDraft.next_plan_procedure_type,
+            planned_date: visitDraft.next_plan_planned_date,
+            status: "pending",
+            note: normalizeText(visitDraft.next_plan_note)
+          };
+
+          const nextPlanRequest = visitDraft.next_plan_step_id
+            ? supabase
+                .from("case_plan_steps")
+                .update(nextPlanPayload)
+                .eq("id", visitDraft.next_plan_step_id)
+                .select()
+                .single()
+            : supabase.from("case_plan_steps").insert(nextPlanPayload).select().single();
+
+          const { data: savedNextStep, error: nextPlanError } = await nextPlanRequest;
+          if (nextPlanError) {
+            throw nextPlanError;
+          }
+        }
+      } catch (backgroundStepError) {
+        backgroundError = backgroundStepError.message;
+      }
+
+      setBusyLabel("同步照片中");
+
+      const photosToDelete = visitDraft.existing_photos.filter((photo) => photo.marked_for_delete);
       if (photosToDelete.length) {
         await removeStorageObjects(photosToDelete);
         const deletePhotoIds = photosToDelete.map((photo) => photo.id);
-        const { error } = await supabase
-          .from("visit_photos")
-          .delete()
-          .in("id", deletePhotoIds);
+        const { error } = await supabase.from("visit_photos").delete().in("id", deletePhotoIds);
         if (error) {
           throw error;
         }
       }
 
-      const photosToUpdate = visitModal.values.existing_photos.filter(
-        (photo) => !photo.marked_for_delete
-      );
+      const photosToUpdate = visitDraft.existing_photos.filter((photo) => !photo.marked_for_delete);
       for (const [index, photo] of photosToUpdate.entries()) {
         const { error } = await supabase
           .from("visit_photos")
@@ -1395,91 +1483,18 @@ export default function App() {
         }
       }
 
-      await uploadVisitPhotos(
-        visitId,
-        visitModal.values.case_id,
-        visitModal.values.new_photos
-      );
-
-      if (visitModal.values.plan_step_id) {
-        const { error } = await supabase
-          .from("case_plan_steps")
-          .update({
-            status: "completed",
-            completed_visit_id: visitId,
-            completed_at: new Date().toISOString()
-          })
-          .eq("id", visitModal.values.plan_step_id);
-        if (error) {
-          throw error;
-        }
+      try {
+        await uploadVisitPhotos(visitId, visitDraft.case_id, patientId, visitDraft.new_photos);
+      } catch (photoError) {
+        backgroundError = backgroundError
+          ? `${backgroundError}；照片同步失敗：${photoError.message}`
+          : `照片同步失敗：${photoError.message}`;
       }
 
-      if (
-        visitModal.values.next_plan_enabled &&
-        visitModal.values.next_plan_procedure_type &&
-        visitModal.values.next_plan_planned_date
-      ) {
-        const currentCaseSteps = (planStepsByCaseId[visitModal.values.case_id] || []).filter(
-          (step) =>
-            step.id !== visitModal.values.plan_step_id && step.id !== visitModal.values.next_plan_step_id
-        );
-        const provisionalNextStep = {
-          id: visitModal.values.next_plan_step_id || `next-${Date.now()}`,
-          case_id: visitModal.values.case_id,
-          planned_date: visitModal.values.next_plan_planned_date,
-          procedure_type: visitModal.values.next_plan_procedure_type,
-          status: "pending",
-          note: visitModal.values.next_plan_note || "",
-          step_order: 0
-        };
-        const orderedSteps = currentCaseSteps.concat(provisionalNextStep).sort(comparePlanStepsByTimeline);
-        const computedStepOrder =
-          orderedSteps.findIndex((step) => step.id === provisionalNextStep.id) + 1;
-        const nextPlanPayload = {
-          owner_user_id: session.user.id,
-          case_id: visitModal.values.case_id,
-          step_order: computedStepOrder,
-          title:
-            PROCEDURE_LABELS[visitModal.values.next_plan_procedure_type] ||
-            visitModal.values.next_plan_procedure_type,
-          procedure_type: visitModal.values.next_plan_procedure_type,
-          planned_date: visitModal.values.next_plan_planned_date,
-          status: "pending",
-          note: normalizeText(visitModal.values.next_plan_note)
-        };
-
-        const nextPlanRequest = visitModal.values.next_plan_step_id
-          ? supabase
-              .from("case_plan_steps")
-              .update(nextPlanPayload)
-              .eq("id", visitModal.values.next_plan_step_id)
-              .select()
-              .single()
-          : supabase.from("case_plan_steps").insert(nextPlanPayload).select().single();
-
-        const { data: savedNextStep, error: nextPlanError } = await nextPlanRequest;
-        if (nextPlanError) {
-          throw nextPlanError;
-        }
-
-        const normalizedSteps = currentCaseSteps
-          .concat(savedNextStep)
-          .sort(comparePlanStepsByTimeline)
-          .map((step, index) => ({ id: step.id, step_order: index + 1 }))
-          .filter((step) => step.id !== savedNextStep.id || step.step_order !== savedNextStep.step_order);
-
-        if (normalizedSteps.length) {
-          await Promise.all(
-            normalizedSteps.map((step) =>
-              supabase.from("case_plan_steps").update({ step_order: step.step_order }).eq("id", step.id)
-            )
-          );
-        }
-      }
-
-      closeVisitModal();
       await loadAppData();
+      if (backgroundError) {
+        setErrorMessage(`回診已儲存，但仍有部分同步未完成：${backgroundError}`);
+      }
     } catch (error) {
       setErrorMessage(error.message);
     } finally {
@@ -3289,6 +3304,12 @@ export default function App() {
               </label>
             </div>
 
+            {visitModal.values.new_photos.length ? (
+              <div className="upload-feedback">
+                {`已加入 ${visitModal.values.new_photos.length} 張待上傳照片，儲存回診後會自動同步。`}
+              </div>
+            ) : null}
+
             {visitModal.values.existing_photos.length ? (
               <div className="photo-draft-grid">
                 {visitModal.values.existing_photos.map((photo, index) => (
@@ -3417,7 +3438,7 @@ export default function App() {
                   <span>下次日期</span>
                   <DateInput
                     value={visitModal.values.next_plan_planned_date}
-                    shortcuts={followUpShortcuts}
+                    shortcuts={visitFollowUpShortcuts}
                     onChange={(nextValue) =>
                       setVisitModal((current) => ({
                         ...current,
