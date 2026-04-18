@@ -161,6 +161,7 @@ export default function App() {
   const [loadingData, setLoadingData] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [noticeMessage, setNoticeMessage] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState("");
   const [activeView, setActiveView] = useState("dashboard");
   const [isTopbarCondensed, setIsTopbarCondensed] = useState(false);
@@ -1246,49 +1247,82 @@ export default function App() {
     }));
   }
 
-  async function uploadVisitPhotos(visitId, caseId, patientId, drafts) {
+  async function uploadVisitPhotos(visitId, caseId, patientId, drafts, onProgress) {
     if (!supabase || !session?.user || !drafts.length) {
-      return;
+      return { uploadedCount: 0, failedCount: 0 };
     }
 
     if (!patientId) {
       throw new Error("找不到病患資料，無法上傳照片。");
     }
 
-    for (const [index, draft] of drafts.entries()) {
-      const extension = draft.file.name.split(".").pop() || "jpg";
-      const safeName = slugifyFileName(
-        `${createClientId()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
-      );
-      const storagePath = `${session.user.id}/${patientId}/${caseId}/${visitId}/${safeName}`;
+    let settledCount = 0;
+    let failedCount = 0;
 
-      const uploadResult = await supabase.storage
-        .from("case-photos")
-        .upload(storagePath, draft.file, {
-          contentType: draft.file.type,
-          upsert: false
-        });
+    const results = await Promise.allSettled(
+      drafts.map(async (draft, index) => {
+        const extension = draft.file.name.split(".").pop() || "jpg";
+        const safeName = slugifyFileName(
+          `${createClientId()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
+        );
+        const storagePath = `${session.user.id}/${patientId}/${caseId}/${visitId}/${safeName}`;
 
-      if (uploadResult.error) {
-        throw uploadResult.error;
-      }
+        try {
+          const uploadResult = await supabase.storage
+            .from("case-photos")
+            .upload(storagePath, draft.file, {
+              contentType: draft.file.type,
+              upsert: false
+            });
 
-      const { error } = await supabase.from("visit_photos").insert({
-        owner_user_id: session.user.id,
-        visit_id: visitId,
-        case_id: caseId,
-        storage_path: storagePath,
-        file_name: draft.file.name,
-        mime_type: draft.file.type,
-        caption: normalizeText(draft.caption),
-        photo_label: normalizeText(draft.photo_label),
-        sort_order: index + 1
-      });
+          if (uploadResult.error) {
+            throw uploadResult.error;
+          }
 
-      if (error) {
-        throw error;
-      }
+          const { error } = await supabase.from("visit_photos").insert({
+            owner_user_id: session.user.id,
+            visit_id: visitId,
+            case_id: caseId,
+            storage_path: storagePath,
+            file_name: draft.file.name,
+            mime_type: draft.file.type,
+            caption: normalizeText(draft.caption),
+            photo_label: normalizeText(draft.photo_label),
+            sort_order: index + 1
+          });
+
+          if (error) {
+            await supabase.storage.from("case-photos").remove([storagePath]);
+            throw error;
+          }
+        } finally {
+          settledCount += 1;
+          onProgress?.({
+            settledCount,
+            totalCount: drafts.length,
+            failedCount
+          });
+        }
+      }).map((task) =>
+        task.catch((error) => {
+          failedCount += 1;
+          throw error;
+        })
+      )
+    );
+
+    const errors = results
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason?.message || "照片同步失敗");
+
+    if (errors.length) {
+      throw new Error(errors.join("；"));
     }
+
+    return {
+      uploadedCount: drafts.length,
+      failedCount: 0
+    };
   }
 
   async function handleVisitSubmit(event) {
@@ -1300,6 +1334,7 @@ export default function App() {
     try {
       setBusyLabel(visitModal.mode === "create" ? "建立回診中" : "更新回診中");
       setErrorMessage("");
+      setNoticeMessage("");
 
       const visitDraft = {
         ...visitModal.values,
@@ -1386,6 +1421,7 @@ export default function App() {
       await loadAppData();
 
       let backgroundError = "";
+      let uploadedPhotoCount = 0;
 
       try {
         if (visitDraft.plan_step_id) {
@@ -1456,7 +1492,9 @@ export default function App() {
         backgroundError = backgroundStepError.message;
       }
 
-      setBusyLabel("同步照片中");
+      if (visitDraft.new_photos.length) {
+        setBusyLabel(`同步照片中 0/${visitDraft.new_photos.length}`);
+      }
 
       const photosToDelete = visitDraft.existing_photos.filter((photo) => photo.marked_for_delete);
       if (photosToDelete.length) {
@@ -1484,7 +1522,17 @@ export default function App() {
       }
 
       try {
-        await uploadVisitPhotos(visitId, visitDraft.case_id, patientId, visitDraft.new_photos);
+        const uploadResult = await uploadVisitPhotos(
+          visitId,
+          visitDraft.case_id,
+          patientId,
+          visitDraft.new_photos,
+          ({ settledCount, totalCount, failedCount }) => {
+            const failureSuffix = failedCount ? `（${failedCount} 張失敗）` : "";
+            setBusyLabel(`同步照片中 ${settledCount}/${totalCount}${failureSuffix}`);
+          }
+        );
+        uploadedPhotoCount = uploadResult.uploadedCount;
       } catch (photoError) {
         backgroundError = backgroundError
           ? `${backgroundError}；照片同步失敗：${photoError.message}`
@@ -1494,6 +1542,8 @@ export default function App() {
       await loadAppData();
       if (backgroundError) {
         setErrorMessage(`回診已儲存，但仍有部分同步未完成：${backgroundError}`);
+      } else if (uploadedPhotoCount) {
+        setNoticeMessage(`照片已同步完成，共 ${uploadedPhotoCount} 張。`);
       }
     } catch (error) {
       setErrorMessage(error.message);
@@ -1708,6 +1758,7 @@ export default function App() {
       </div>
 
       {errorMessage ? <div className="flash flash--error">{errorMessage}</div> : null}
+      {noticeMessage ? <div className="flash flash--busy">{noticeMessage}</div> : null}
       {busyLabel ? <div className="flash flash--busy">{busyLabel}...</div> : null}
       {showNoDataHint ? (
         <div className="flash flash--info">
