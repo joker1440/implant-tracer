@@ -98,6 +98,116 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function normalizeHealingSize(value) {
+  if (value === "6.2") {
+    return "6x2";
+  }
+  return value || "";
+}
+
+function createEmptyToothImplantConfig(toothCode = "") {
+  return {
+    tooth_code: toothCode,
+    implant_brand: "",
+    implant_model: "",
+    implant_diameter_mm: "",
+    implant_length_mm: "",
+    healing_used: false,
+    healing_size: ""
+  };
+}
+
+function deriveToothImplants(procedure, toothCodes) {
+  const safeToothCodes = toothCodes?.length ? toothCodes : [];
+  if (!safeToothCodes.length) {
+    return [];
+  }
+
+  const savedToothImplants = Array.isArray(procedure?.extra_data?.tooth_implants)
+    ? procedure.extra_data.tooth_implants
+    : [];
+
+  return safeToothCodes.map((toothCode, index) => {
+    const saved =
+      savedToothImplants.find((item) => item?.tooth_code === toothCode) ||
+      (savedToothImplants.length === 1 && index === 0 ? savedToothImplants[0] : null);
+
+    if (saved) {
+      return {
+        ...createEmptyToothImplantConfig(toothCode),
+        ...saved,
+        tooth_code: toothCode,
+        healing_used: Boolean(saved.healing_used),
+        healing_size: normalizeHealingSize(saved.healing_size)
+      };
+    }
+
+    if (safeToothCodes.length === 1) {
+      return {
+        tooth_code: toothCode,
+        implant_brand: procedure?.implant_brand || "",
+        implant_model: procedure?.implant_model || "",
+        implant_diameter_mm: procedure?.implant_diameter_mm ?? "",
+        implant_length_mm: procedure?.implant_length_mm ?? "",
+        healing_used: Boolean(procedure?.extra_data?.healing_used),
+        healing_size: normalizeHealingSize(procedure?.extra_data?.healing_size)
+      };
+    }
+
+    return createEmptyToothImplantConfig(toothCode);
+  });
+}
+
+function syncProcedureToothImplants(procedure, toothImplants) {
+  const normalizedToothImplants = toothImplants.map((item) => ({
+    ...createEmptyToothImplantConfig(item.tooth_code),
+    ...item,
+    healing_used: Boolean(item.healing_used),
+    healing_size: normalizeHealingSize(item.healing_size)
+  }));
+
+  const primaryToothImplant =
+    normalizedToothImplants.find(
+      (item) =>
+        item.implant_brand ||
+        item.implant_model ||
+        item.implant_diameter_mm ||
+        item.implant_length_mm ||
+        item.healing_used ||
+        item.healing_size
+    ) || normalizedToothImplants[0];
+
+  return {
+    ...procedure,
+    implant_brand: primaryToothImplant?.implant_brand || "",
+    implant_model: primaryToothImplant?.implant_model || "",
+    implant_diameter_mm: primaryToothImplant?.implant_diameter_mm || "",
+    implant_length_mm: primaryToothImplant?.implant_length_mm || "",
+    extra_data: {
+      ...procedure.extra_data,
+      healing_used: Boolean(primaryToothImplant?.healing_used),
+      healing_size: normalizeHealingSize(primaryToothImplant?.healing_size),
+      tooth_implants: normalizedToothImplants
+    }
+  };
+}
+
+function dedupeTimelineItemsByPatientTooth(items) {
+  const seenKeys = new Set();
+
+  return items.filter((entry) => {
+    const toothKey = getCaseToothCodes(entry.caseEntry).join("|");
+    const caseKey = `${entry.patient.id}::${toothKey}`;
+
+    if (seenKeys.has(caseKey)) {
+      return false;
+    }
+
+    seenKeys.add(caseKey);
+    return true;
+  });
+}
+
 function photoTitle(photo) {
   if (!photo) {
     return "未選";
@@ -196,6 +306,9 @@ export default function App() {
     index: -1
   });
   const [patientSheetOpen, setPatientSheetOpen] = useState(false);
+  const [patientActionsOpen, setPatientActionsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const [clinicCatalogFallback, setClinicCatalogFallback] = useState(false);
   const [patientModal, setPatientModal] = useState({
     open: false,
@@ -268,6 +381,12 @@ export default function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    setPatientSheetOpen(false);
+    setPatientActionsOpen(false);
+    setMobileMenuOpen(false);
+  }, [activeView]);
 
   function getNextPlanStepOrder(stepEntries) {
     return (
@@ -507,9 +626,64 @@ export default function App() {
       )
       .map((visit) => visit.visited_on)
       .sort((left, right) => right.localeCompare(left))[0] || null;
+  const selectedCaseLatestImplantProcedure =
+    selectedCaseVisits
+      .flatMap((visit) =>
+        (proceduresByVisitId[visit.id] || [])
+          .filter((procedure) => procedure.procedure_type === "implant_placement")
+          .map((procedure) => ({
+            ...procedure,
+            visited_on: visit.visited_on
+          }))
+      )
+      .sort((left, right) => {
+        return (
+          right.visited_on.localeCompare(left.visited_on) ||
+          String(right.created_at || "").localeCompare(String(left.created_at || ""))
+        );
+      })[0] || null;
   const selectedCasePhotos = (photosByCaseId[selectedCaseId] || []).slice();
   const selectedCaseToothLabel = formatCaseToothLabel(selectedCase);
   const selectedCaseToothHeading = formatCaseToothLabel(selectedCase, { withPrefix: true });
+  const selectedCaseImplantEntries = (() => {
+    const caseToothCodes = getCaseToothCodes(selectedCase);
+
+    if (selectedCaseLatestImplantProcedure) {
+      const toothImplants = deriveToothImplants(selectedCaseLatestImplantProcedure, caseToothCodes)
+        .filter(
+          (item) =>
+            item.implant_brand ||
+            item.implant_model ||
+            item.implant_diameter_mm ||
+            item.implant_length_mm ||
+            item.healing_used ||
+            item.healing_size
+        )
+        .map((item) => ({
+          ...item,
+          placed_on: selectedCaseLatestImplantProcedure.visited_on || selectedCaseImplant?.placed_on || null
+        }));
+
+      if (toothImplants.length) {
+        return toothImplants;
+      }
+    }
+
+    if (!selectedCaseImplant) {
+      return [];
+    }
+
+    return [
+      {
+        tooth_code: caseToothCodes[0] || "",
+        implant_brand: selectedCaseImplant.brand || "",
+        implant_model: selectedCaseImplant.model || "",
+        implant_diameter_mm: selectedCaseImplant.diameter_mm ?? "",
+        implant_length_mm: selectedCaseImplant.length_mm ?? "",
+        placed_on: selectedCaseImplant.placed_on || null
+      }
+    ];
+  })();
   const getPlanStepLabel = (step) =>
     PROCEDURE_LABELS[step?.procedure_type] || step?.title || "";
   const getProcedureToneClass = (procedureType) => {
@@ -522,6 +696,8 @@ export default function App() {
         return "pill--mist";
       case "sinus_lift":
         return "pill--amber";
+      case "remove_membrane":
+        return "pill--sand";
       case "implant_placement":
         return "pill--green";
       case "fgg_ctg":
@@ -650,28 +826,17 @@ export default function App() {
     })
     .filter((entry) => entry.caseEntry && entry.patient);
 
-  const overdueItems = pendingPlanSteps
-    .filter((entry) => entry.diffDays !== null && entry.diffDays < 0)
-    .sort((left, right) => left.diffDays - right.diffDays);
+  const overdueItems = dedupeTimelineItemsByPatientTooth(
+    pendingPlanSteps
+      .filter((entry) => entry.diffDays !== null && entry.diffDays < 0)
+      .sort((left, right) => left.diffDays - right.diffDays)
+  );
 
-  const upcomingItems = (() => {
-    const seenCaseKeys = new Set();
-
-    return pendingPlanSteps
+  const upcomingItems = dedupeTimelineItemsByPatientTooth(
+    pendingPlanSteps
       .filter((entry) => entry.diffDays !== null && entry.diffDays >= 0)
       .sort((left, right) => left.diffDays - right.diffDays)
-      .filter((entry) => {
-        const toothKey = getCaseToothCodes(entry.caseEntry).join("|");
-        const upcomingKey = `${entry.patient.id}::${toothKey}`;
-
-        if (seenCaseKeys.has(upcomingKey)) {
-          return false;
-        }
-
-        seenCaseKeys.add(upcomingKey);
-        return true;
-      });
-  })();
+  );
 
   const stats = {
     totalCases: records.cases.length,
@@ -1121,9 +1286,14 @@ export default function App() {
           extra_data: {
             healing_used: Boolean(procedure.extra_data?.healing_used),
             healing_size:
-              procedure.extra_data?.healing_size === "6.2"
-                ? "6x2"
-                : procedure.extra_data?.healing_size || ""
+              normalizeHealingSize(procedure.extra_data?.healing_size),
+            tooth_implants: Array.isArray(procedure.extra_data?.tooth_implants)
+              ? procedure.extra_data.tooth_implants.map((item) => ({
+                  ...item,
+                  healing_used: Boolean(item?.healing_used),
+                  healing_size: normalizeHealingSize(item?.healing_size)
+                }))
+              : []
           }
         }))
       : [createEmptyProcedure(planStep?.procedure_type || "consultation")];
@@ -1702,6 +1872,7 @@ export default function App() {
       };
       const caseEntry = casesById[visitDraft.case_id];
       const patientId = caseEntry?.patient_id || selectedPatientId;
+      const visitCaseToothCodes = getCaseToothCodes(caseEntry);
 
       let visitId = visitModal.visitId;
 
@@ -1736,22 +1907,66 @@ export default function App() {
 
       const normalizedProcedures = visitDraft.procedures
         .filter((procedure) => procedure.procedure_type)
-        .map((procedure, index) => ({
-          owner_user_id: session.user.id,
-          visit_id: visitId,
-          procedure_order: index + 1,
-          procedure_type: procedure.procedure_type,
-          procedure_note: normalizeText(procedure.procedure_note),
-          implant_brand: normalizeText(procedure.implant_brand),
-          implant_model: normalizeText(procedure.implant_model),
-          implant_diameter_mm: numberOrNull(procedure.implant_diameter_mm),
-          implant_length_mm: numberOrNull(procedure.implant_length_mm),
-          bone_graft_materials: procedure.bone_graft_materials || [],
-          membrane_type: procedure.membrane_type || null,
-          membrane_note: normalizeText(procedure.membrane_note),
-          sinus_lift_approach: procedure.sinus_lift_approach || null,
-          extra_data: procedure.extra_data || {}
-        }));
+        .map((procedure, index) => {
+          const toothImplants =
+            procedure.procedure_type === "implant_placement"
+              ? deriveToothImplants(procedure, visitCaseToothCodes).map((item) => ({
+                  tooth_code: item.tooth_code,
+                  implant_brand: normalizeText(item.implant_brand),
+                  implant_model: normalizeText(item.implant_model),
+                  implant_diameter_mm: numberOrNull(item.implant_diameter_mm),
+                  implant_length_mm: numberOrNull(item.implant_length_mm),
+                  healing_used: Boolean(item.healing_used),
+                  healing_size: normalizeHealingSize(item.healing_size)
+                }))
+              : [];
+
+          const primaryToothImplant =
+            toothImplants.find(
+              (item) =>
+                item.implant_brand ||
+                item.implant_model ||
+                item.implant_diameter_mm !== null ||
+                item.implant_length_mm !== null ||
+                item.healing_used ||
+                item.healing_size
+            ) || toothImplants[0];
+
+          return {
+            owner_user_id: session.user.id,
+            visit_id: visitId,
+            procedure_order: index + 1,
+            procedure_type: procedure.procedure_type,
+            procedure_note: normalizeText(procedure.procedure_note),
+            implant_brand: normalizeText(
+              primaryToothImplant?.implant_brand || procedure.implant_brand
+            ),
+            implant_model: normalizeText(
+              primaryToothImplant?.implant_model || procedure.implant_model
+            ),
+            implant_diameter_mm: numberOrNull(
+              primaryToothImplant?.implant_diameter_mm ?? procedure.implant_diameter_mm
+            ),
+            implant_length_mm: numberOrNull(
+              primaryToothImplant?.implant_length_mm ?? procedure.implant_length_mm
+            ),
+            bone_graft_materials: procedure.bone_graft_materials || [],
+            membrane_type: procedure.membrane_type || null,
+            membrane_note: normalizeText(procedure.membrane_note),
+            sinus_lift_approach: procedure.sinus_lift_approach || null,
+            extra_data: {
+              ...(procedure.extra_data || {}),
+              healing_used:
+                primaryToothImplant?.healing_used ?? Boolean(procedure.extra_data?.healing_used),
+              healing_size:
+                primaryToothImplant?.healing_size ||
+                normalizeHealingSize(procedure.extra_data?.healing_size),
+              ...(procedure.procedure_type === "implant_placement"
+                ? { tooth_implants: toothImplants }
+                : {})
+            }
+          };
+        });
 
       if (normalizedProcedures.length) {
         const { error } = await supabase
@@ -2066,7 +2281,7 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="topbar__actions">
+          <div className="topbar__actions desktop-only">
             <button className="ghost-button" type="button" onClick={loadAppData}>
               重新整理
             </button>
@@ -2075,6 +2290,13 @@ export default function App() {
               登出
             </button>
           </div>
+          <button
+            className="ghost-button mobile-topbar-only topbar__mobile-trigger"
+            type="button"
+            onClick={() => setMobileMenuOpen(true)}
+          >
+            更多
+          </button>
         </header>
       </div>
 
@@ -2190,17 +2412,22 @@ export default function App() {
                             <strong>{monthDay.day}</strong>
                           </div>
                           <div className="agenda-item__body">
-                            <div className="agenda-item__row">
+                            <div className="agenda-item__person">
                               <strong>{item.patient.full_name}</strong>
-                              <span className="tag">#{caseDisplayNoById[item.caseEntry.id]}</span>
+                              {item.patient.clinic_name ? (
+                                <span className="muted-text">{item.patient.clinic_name}</span>
+                              ) : null}
                             </div>
-                            <div className="agenda-item__row">
-                              <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                                {getPlanStepLabel(item)}
-                              </span>
-                              <span className="overdue-text">逾期 {Math.abs(item.diffDays)} 天</span>
-                            </div>
+                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                              {getPlanStepLabel(item)}
+                            </span>
                           </div>
+                          <span className="tag agenda-item__tooth-tag">
+                            <span className="agenda-item__tooth-label">牙位</span>
+                            <strong className="agenda-item__tooth-value">
+                              {formatCaseToothLabel(item.caseEntry)}
+                            </strong>
+                          </span>
                         </button>
                       );
                     })}
@@ -2255,18 +2482,25 @@ export default function App() {
                           切換病患
                         </button>
                         <button
-                          className="secondary-button"
+                          className="secondary-button patient-detail-actions__desktop"
                           type="button"
                           onClick={() => openPatientModal("edit", selectedPatient)}
                         >
                           編輯病患
                         </button>
                         <button
-                          className="danger-button"
+                          className="danger-button patient-detail-actions__desktop"
                           type="button"
                           onClick={() => handleDeletePatient(selectedPatient.id)}
                         >
                           刪除病患
+                        </button>
+                        <button
+                          className="ghost-button mobile-only"
+                          type="button"
+                          onClick={() => setPatientActionsOpen(true)}
+                        >
+                          管理病患
                         </button>
                       </div>
                     </div>
@@ -2481,30 +2715,40 @@ export default function App() {
                           </div>
                         ) : null}
 
-                        {selectedCaseImplant ? (
+                        {selectedCaseImplantEntries.length ? (
                           <div className="implant-snapshot implant-snapshot--inline">
                             <span className="detail-label implant-snapshot__title">植體資訊</span>
-                            <div className="implant-snapshot__grid">
-                              <div>
-                                <span className="detail-label">廠牌</span>
-                                <strong>
-                                  {selectedCaseImplant.brand || "-"} {selectedCaseImplant.model || ""}
-                                </strong>
-                              </div>
-                              <div>
-                                <span className="detail-label">直徑 / 長度</span>
-                                <strong>
-                                  {selectedCaseImplant.diameter_mm || "-"} / {selectedCaseImplant.length_mm || "-"} mm
-                                </strong>
-                              </div>
-                              <div>
-                                <span className="detail-label">植入</span>
-                                <strong>
-                                  {selectedCaseImplant.placed_on
-                                    ? formatDate(selectedCaseImplant.placed_on)
-                                    : "未設定"}
-                                </strong>
-                              </div>
+                            <div className="implant-snapshot__stack">
+                              {selectedCaseImplantEntries.map((implantEntry, index) => (
+                                <div
+                                  className="implant-snapshot__grid implant-snapshot__row"
+                                  key={`${implantEntry.tooth_code || "implant"}-${index}`}
+                                >
+                                  <div>
+                                    <span className="detail-label">牙位</span>
+                                    <strong>{implantEntry.tooth_code || selectedCaseToothLabel}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="detail-label">廠牌</span>
+                                    <strong>
+                                      {implantEntry.implant_brand || "-"} {implantEntry.implant_model || ""}
+                                    </strong>
+                                  </div>
+                                  <div>
+                                    <span className="detail-label">直徑 / 長度</span>
+                                    <strong>
+                                      {implantEntry.implant_diameter_mm || "-"} /{" "}
+                                      {implantEntry.implant_length_mm || "-"} mm
+                                    </strong>
+                                  </div>
+                                  <div>
+                                    <span className="detail-label">植入</span>
+                                    <strong>
+                                      {implantEntry.placed_on ? formatDate(implantEntry.placed_on) : "未設定"}
+                                    </strong>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ) : null}
@@ -2838,7 +3082,22 @@ export default function App() {
                     placeholder="病患姓名 / 牙位 / case 編號 / 備註"
                   />
                 </label>
-                <div className="field field--full">
+                <div className="field field--full mobile-only">
+                  <span>進階篩選</span>
+                  <button
+                    className="ghost-button search-filter-toggle"
+                    type="button"
+                    onClick={() => setSearchFiltersOpen((current) => !current)}
+                  >
+                    {searchFiltersOpen ? "收起篩選" : "展開篩選"}
+                  </button>
+                </div>
+                <div
+                  className={cx(
+                    "field field--full search-filters-panel",
+                    !searchFiltersOpen && "search-filters-panel--collapsed-mobile"
+                  )}
+                >
                   <span>治療內容篩選</span>
                   <PillSelect
                     value={procedureFilter}
@@ -2853,6 +3112,8 @@ export default function App() {
                 {searchResults.map((entry) => {
                   const patient = patientsById[entry.patient_id];
                   const procedures = proceduresByCaseId[entry.id] || [];
+                  const visibleProcedures = procedures.slice(0, 2);
+                  const extraProcedureCount = Math.max(procedures.length - visibleProcedures.length, 0);
                   const nextStep = (planStepsByCaseId[entry.id] || [])
                     .filter((step) => step.status === "pending")
                     .sort((left, right) => {
@@ -2873,20 +3134,27 @@ export default function App() {
                       }}
                     >
                       <div className="search-card__header">
-                        <strong>{patient?.full_name || "Unknown patient"}</strong>
-                        <div className="chip-row">
+                        <div className="search-card__identity">
+                          <strong>{patient?.full_name || "Unknown patient"}</strong>
+                          {patient?.clinic_name ? (
+                            <span className="muted-text">{patient.clinic_name}</span>
+                          ) : null}
+                        </div>
+                        <div className="chip-row search-card__chips">
                           <span className="tag">#{caseDisplayNoById[entry.id]}</span>
-                          <span className="tag">{formatCaseToothLabel(entry)}</span>
+                          <span className="tag">牙位 {formatCaseToothLabel(entry)}</span>
                         </div>
                       </div>
                       <div className="search-card__meta">
-                        {entry.template_key ? (
-                          <span>{TEMPLATE_LABELS[entry.template_key]}</span>
-                        ) : null}
                         <span>{CASE_STATUS_LABELS[entry.status]}</span>
+                        {nextStep ? (
+                          <span>
+                            下次 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="chip-row">
-                        {procedures.slice(0, 5).map((procedure) => (
+                      <div className="chip-row search-card__procedure-row">
+                        {visibleProcedures.map((procedure) => (
                           <span
                             className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
                             key={procedure.id}
@@ -2894,12 +3162,10 @@ export default function App() {
                             {PROCEDURE_LABELS[procedure.procedure_type]}
                           </span>
                         ))}
+                        {extraProcedureCount ? (
+                          <span className="tag">+{extraProcedureCount}</span>
+                        ) : null}
                       </div>
-                      {nextStep ? (
-                        <p className="muted-text">
-                          下次回診 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
-                        </p>
-                      ) : null}
                     </button>
                   );
                 })}
@@ -3169,6 +3435,101 @@ export default function App() {
               />
             </label>
             {renderPatientList(() => setPatientSheetOpen(false))}
+          </section>
+        </div>
+      ) : null}
+
+      {activeView === "patients" && selectedPatient && patientActionsOpen ? (
+        <div
+          className="mobile-sheet-backdrop"
+          onClick={() => setPatientActionsOpen(false)}
+          role="presentation"
+        >
+          <section className="mobile-sheet mobile-sheet--compact" onClick={(event) => event.stopPropagation()}>
+            <div className="mobile-sheet__grabber" />
+            <div className="mobile-sheet__header">
+              <div>
+                <p className="eyebrow">Patient</p>
+                <h3>管理病患</h3>
+              </div>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setPatientActionsOpen(false)}
+              >
+                關閉
+              </button>
+            </div>
+            <div className="mobile-menu-list">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setPatientActionsOpen(false);
+                  openPatientModal("edit", selectedPatient);
+                }}
+              >
+                編輯病患
+              </button>
+              <button
+                className="danger-button"
+                type="button"
+                onClick={() => {
+                  setPatientActionsOpen(false);
+                  handleDeletePatient(selectedPatient.id);
+                }}
+              >
+                刪除病患
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {mobileMenuOpen ? (
+        <div
+          className="mobile-sheet-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          role="presentation"
+        >
+          <section className="mobile-sheet mobile-sheet--compact" onClick={(event) => event.stopPropagation()}>
+            <div className="mobile-sheet__grabber" />
+            <div className="mobile-sheet__header">
+              <div>
+                <p className="eyebrow">Menu</p>
+                <h3>更多操作</h3>
+              </div>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                關閉
+              </button>
+            </div>
+            <div className="mobile-menu-list">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  loadAppData();
+                }}
+              >
+                重新整理
+              </button>
+              <div className="date-chip mobile-menu-date">{formatDate(todayIso())}</div>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleSignOut();
+                }}
+              >
+                登出
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
@@ -3589,9 +3950,19 @@ export default function App() {
 
             <div className="procedure-stack">
               {visitModal.values.procedures.map((procedure, index) => {
-                const implantModelOptions =
-                  IMPLANT_MODEL_OPTIONS_BY_BRAND[procedure.implant_brand || ""] || [];
-                const healingSelection = procedure.extra_data?.healing_used ? "yes" : "no";
+                const procedureCaseToothCodes = getCaseToothCodes(
+                  casesById[visitModal.values.case_id]
+                );
+                const toothImplants = deriveToothImplants(procedure, procedureCaseToothCodes);
+                const updateToothImplant = (toothCode, patch) =>
+                  updateVisitProcedureAt(index, (item) =>
+                    syncProcedureToothImplants(
+                      item,
+                      deriveToothImplants(item, procedureCaseToothCodes).map((entry) =>
+                        entry.tooth_code === toothCode ? { ...entry, ...patch } : entry
+                      )
+                    )
+                  );
 
                 return (
                   <article className="procedure-card" key={procedure.id || index}>
@@ -3671,137 +4042,145 @@ export default function App() {
 
                   {procedure.procedure_type === "implant_placement" ? (
                     <div className="implant-configurator">
-                      <div className="field field--full">
-                        <span>植體廠牌</span>
-                        <PillSelect
-                          value={procedure.implant_brand || ""}
-                          options={IMPLANT_BRAND_OPTIONS}
-                          onChange={(nextValue) =>
-                            updateVisitProcedureAt(index, (item) => {
-                              const nextModelOptions =
-                                IMPLANT_MODEL_OPTIONS_BY_BRAND[nextValue] || [];
-                              const nextModel =
-                                nextModelOptions.find((option) => option.value === item.implant_model)
-                                  ?.value || "";
+                      {toothImplants.length ? (
+                        <div className="implant-tooth-grid field--full">
+                          {toothImplants.map((toothImplant) => {
+                            const toothModelOptions =
+                              IMPLANT_MODEL_OPTIONS_BY_BRAND[toothImplant.implant_brand || ""] || [];
+                            const toothHealingSelection = toothImplant.healing_used ? "yes" : "no";
 
-                              return {
-                                ...item,
-                                implant_brand: nextValue,
-                                implant_model: nextModel
-                              };
-                            })
-                          }
-                          getToneClass={getImplantBrandToneClass}
-                        />
-                      </div>
-
-                      <div className="field field--full">
-                        <span>植體型號</span>
-                        {implantModelOptions.length ? (
-                          <PillSelect
-                            value={procedure.implant_model || ""}
-                            options={implantModelOptions}
-                            onChange={(nextValue) =>
-                              updateVisitProcedureAt(index, (item) => ({
-                                ...item,
-                                implant_model: nextValue
-                              }))
-                            }
-                            getToneClass={() => getImplantBrandToneClass(procedure.implant_brand)}
-                          />
-                        ) : (
-                          <div className="implant-configurator__hint">
-                            先選植體廠牌，再選對應型號。
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="field field--full">
-                        <span>直徑 (mm)</span>
-                        <PillSelect
-                          value={String(procedure.implant_diameter_mm || "")}
-                          options={IMPLANT_DIAMETER_OPTIONS}
-                          onChange={(nextValue) =>
-                            updateVisitProcedureAt(index, (item) => ({
-                              ...item,
-                              implant_diameter_mm: nextValue
-                            }))
-                          }
-                          getToneClass={() => "pill--mist"}
-                        />
-                      </div>
-
-                      <div className="field field--full">
-                        <span>長度 (mm)</span>
-                        <PillSelect
-                          value={String(procedure.implant_length_mm || "")}
-                          options={IMPLANT_LENGTH_OPTIONS}
-                          onChange={(nextValue) =>
-                            updateVisitProcedureAt(index, (item) => ({
-                              ...item,
-                              implant_length_mm: nextValue
-                            }))
-                          }
-                          getToneClass={() => "pill--sand"}
-                        />
-                      </div>
-
-                      <div className="field field--full">
-                        <span>使用 Healing</span>
-                        <PillSelect
-                          value={healingSelection}
-                          options={HEALING_TOGGLE_OPTIONS}
-                          onChange={(nextValue) =>
-                            updateVisitProcedureAt(index, (item) => ({
-                              ...item,
-                              extra_data: {
-                                ...item.extra_data,
-                                healing_used: nextValue === "yes",
-                                healing_size: nextValue === "yes" ? item.extra_data?.healing_size || "" : ""
-                              }
-                            }))
-                          }
-                          getToneClass={getHealingToggleToneClass}
-                        />
-                      </div>
-
-                      {procedure.extra_data?.healing_used ? (
-                        <div className="implant-healing-panel field--full">
-                          <div className="implant-healing-panel__header">
-                            <strong>Healing Size</strong>
-                          </div>
-                          <div className="implant-healing-groups">
-                            {healingSizeGroups.map(([groupLabel, groupOptions]) => (
-                              <div className="implant-healing-row" key={groupLabel}>
-                                <span className="implant-healing-row__label">{groupLabel}</span>
-                                <div className="pill-select pill-select--dense">
-                                  {groupOptions.map((option) => (
-                                    <button
-                                      key={option.value}
-                                      className={cx(
-                                        "pill-option",
-                                        "pill--lavender",
-                                        procedure.extra_data?.healing_size === option.value && "is-active"
-                                      )}
-                                      type="button"
-                                      onClick={() =>
-                                        updateVisitProcedureAt(index, (item) => ({
-                                          ...item,
-                                          extra_data: {
-                                            ...item.extra_data,
-                                            healing_used: true,
-                                            healing_size: option.value
-                                          }
-                                        }))
-                                      }
-                                    >
-                                      {option.label}
-                                    </button>
-                                  ))}
+                            return (
+                              <section className="implant-tooth-card" key={toothImplant.tooth_code}>
+                                <div className="implant-tooth-card__header">
+                                  <strong>牙位 {toothImplant.tooth_code}</strong>
                                 </div>
-                              </div>
-                            ))}
-                          </div>
+
+                                <div className="field field--full">
+                                  <span>植體廠牌</span>
+                                  <PillSelect
+                                    value={toothImplant.implant_brand || ""}
+                                    options={IMPLANT_BRAND_OPTIONS}
+                                    onChange={(nextValue) => {
+                                      const nextModelOptions =
+                                        IMPLANT_MODEL_OPTIONS_BY_BRAND[nextValue] || [];
+                                      const nextModel =
+                                        nextModelOptions.find(
+                                          (option) => option.value === toothImplant.implant_model
+                                        )?.value || "";
+
+                                      updateToothImplant(toothImplant.tooth_code, {
+                                        implant_brand: nextValue,
+                                        implant_model: nextModel
+                                      });
+                                    }}
+                                    getToneClass={getImplantBrandToneClass}
+                                  />
+                                </div>
+
+                                <div className="field field--full">
+                                  <span>植體型號</span>
+                                  {toothModelOptions.length ? (
+                                    <PillSelect
+                                      value={toothImplant.implant_model || ""}
+                                      options={toothModelOptions}
+                                      onChange={(nextValue) =>
+                                        updateToothImplant(toothImplant.tooth_code, {
+                                          implant_model: nextValue
+                                        })
+                                      }
+                                      getToneClass={() =>
+                                        getImplantBrandToneClass(toothImplant.implant_brand)
+                                      }
+                                    />
+                                  ) : (
+                                    <div className="implant-configurator__hint">
+                                      先選植體廠牌，再選對應型號。
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="field field--full">
+                                  <span>直徑 (mm)</span>
+                                  <PillSelect
+                                    value={String(toothImplant.implant_diameter_mm || "")}
+                                    options={IMPLANT_DIAMETER_OPTIONS}
+                                    onChange={(nextValue) =>
+                                      updateToothImplant(toothImplant.tooth_code, {
+                                        implant_diameter_mm: nextValue
+                                      })
+                                    }
+                                    getToneClass={() => "pill--mist"}
+                                  />
+                                </div>
+
+                                <div className="field field--full">
+                                  <span>長度 (mm)</span>
+                                  <PillSelect
+                                    value={String(toothImplant.implant_length_mm || "")}
+                                    options={IMPLANT_LENGTH_OPTIONS}
+                                    onChange={(nextValue) =>
+                                      updateToothImplant(toothImplant.tooth_code, {
+                                        implant_length_mm: nextValue
+                                      })
+                                    }
+                                    getToneClass={() => "pill--sand"}
+                                  />
+                                </div>
+
+                                <div className="field field--full">
+                                  <span>使用 Healing</span>
+                                  <PillSelect
+                                    value={toothHealingSelection}
+                                    options={HEALING_TOGGLE_OPTIONS}
+                                    onChange={(nextValue) =>
+                                      updateToothImplant(toothImplant.tooth_code, {
+                                        healing_used: nextValue === "yes",
+                                        healing_size:
+                                          nextValue === "yes" ? toothImplant.healing_size || "" : ""
+                                      })
+                                    }
+                                    getToneClass={getHealingToggleToneClass}
+                                  />
+                                </div>
+
+                                {toothImplant.healing_used ? (
+                                  <div className="implant-healing-panel field--full">
+                                    <div className="implant-healing-panel__header">
+                                      <strong>Healing Size</strong>
+                                    </div>
+                                    <div className="implant-healing-groups">
+                                      {healingSizeGroups.map(([groupLabel, groupOptions]) => (
+                                        <div className="implant-healing-row" key={groupLabel}>
+                                          <span className="implant-healing-row__label">{groupLabel}</span>
+                                          <div className="pill-select pill-select--dense">
+                                            {groupOptions.map((option) => (
+                                              <button
+                                                key={option.value}
+                                                className={cx(
+                                                  "pill-option",
+                                                  "pill--lavender",
+                                                  toothImplant.healing_size === option.value && "is-active"
+                                                )}
+                                                type="button"
+                                                onClick={() =>
+                                                  updateToothImplant(toothImplant.tooth_code, {
+                                                    healing_used: true,
+                                                    healing_size: option.value
+                                                  })
+                                                }
+                                              >
+                                                {option.label}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </section>
+                            );
+                          })}
                         </div>
                       ) : null}
                     </div>

@@ -33,6 +33,7 @@ export const PROCEDURE_OPTIONS = [
   { value: "arp", label: "ARP" },
   { value: "gbr", label: "GBR" },
   { value: "sinus_lift", label: "Sinus Lift" },
+  { value: "remove_membrane", label: "移除再生膜" },
   { value: "implant_placement", label: "植牙" },
   { value: "fgg_ctg", label: "FGG / CTG" },
   { value: "stage_2_healing_abutment", label: "接healing" },
