@@ -475,6 +475,15 @@ export default function App() {
     .slice()
     .sort((left, right) => left.visited_on.localeCompare(right.visited_on));
   const selectedCaseImplant = selectedCaseId ? caseImplantsByCaseId[selectedCaseId] : null;
+  const selectedCaseDeliveryDate =
+    selectedCaseVisits
+      .filter((visit) =>
+        (proceduresByVisitId[visit.id] || []).some(
+          (procedure) => procedure.procedure_type === "delivery"
+        )
+      )
+      .map((visit) => visit.visited_on)
+      .sort((left, right) => right.localeCompare(left))[0] || null;
   const selectedCasePhotos = (photosByCaseId[selectedCaseId] || []).slice();
   const selectedCaseToothLabel = formatCaseToothLabel(selectedCase);
   const selectedCaseToothHeading = formatCaseToothLabel(selectedCase, { withPrefix: true });
@@ -1834,8 +1843,12 @@ export default function App() {
       </div>
 
       {errorMessage ? <div className="flash flash--error">{errorMessage}</div> : null}
-      {noticeMessage ? <div className="flash flash--busy">{noticeMessage}</div> : null}
-      {busyLabel ? <div className="flash flash--busy">{busyLabel}...</div> : null}
+      {noticeMessage || busyLabel ? (
+        <div className="flash-stack flash-stack--floating">
+          {noticeMessage ? <div className="flash flash--busy">{noticeMessage}</div> : null}
+          {busyLabel ? <div className="flash flash--busy">{busyLabel}...</div> : null}
+        </div>
+      ) : null}
       {showNoDataHint ? (
         <div className="flash flash--info">
           {`目前登入帳號：${currentUserEmail || "未顯示"}。這個帳號目前沒有病患資料；如果你原本應該看得到資料，請確認是否登入正確帳號，或按一次「重新整理」。`}
@@ -2113,13 +2126,35 @@ export default function App() {
 
                     <div className="case-grid">
                       {selectedPatientCases.map((entry) => {
-                        const nextStep = (planStepsByCaseId[entry.id] || [])
+                        const caseSteps = (planStepsByCaseId[entry.id] || [])
+                          .slice()
+                          .sort(comparePlanStepsByTimeline);
+                        const nextStep = caseSteps
                           .filter((step) => step.status === "pending")
-                          .sort((left, right) => {
-                            if (!left.planned_date) return 1;
-                            if (!right.planned_date) return -1;
-                            return left.planned_date.localeCompare(right.planned_date);
-                          })[0];
+                          .sort(comparePlanStepsByTimeline)[0];
+                        const completedStepCount = caseSteps.filter(
+                          (step) => step.status === "completed"
+                        ).length;
+                        const firstPendingStepId =
+                          caseSteps.find((step) => step.status === "pending")?.id || "";
+                        const flowSteps = caseSteps.length
+                          ? caseSteps.slice(0, 6).map((step) => ({
+                              id: step.id,
+                              label: getPlanStepLabel(step),
+                              status: step.status,
+                              isCurrent: step.id === firstPendingStepId
+                            }))
+                          : entry.template_key
+                            ? TEMPLATE_FLOW_PREVIEWS[entry.template_key]
+                                .split(" -> ")
+                                .slice(0, 6)
+                                .map((label) => ({
+                                  id: label,
+                                  label,
+                                  status: "pending",
+                                  isCurrent: false
+                                }))
+                            : [];
 
                         return (
                           <button
@@ -2131,23 +2166,59 @@ export default function App() {
                             <div className="case-card__header">
                               <div className="chip-row">
                                 <span className="tag">#{caseDisplayNoById[entry.id]}</span>
-                                <span className="tag">{formatCaseToothLabel(entry)}</span>
+                                <span className="tag case-card__tooth-tag">
+                                  牙位 {formatCaseToothLabel(entry)}
+                                </span>
                               </div>
+                              <span className={cx("pill", getCaseStatusToneClass(entry.status))}>
+                                {CASE_STATUS_LABELS[entry.status]}
+                              </span>
                             </div>
-                            <strong>{entry.title || TEMPLATE_LABELS[entry.template_key] || "Implant Case"}</strong>
-                            <div className="case-card__meta">
-                              <span>{CASE_STATUS_LABELS[entry.status]}</span>
-                              {entry.template_key ? (
-                                <span>{TEMPLATE_LABELS[entry.template_key]}</span>
+                            <div className="case-card__title-row">
+                              <strong>{entry.title || TEMPLATE_LABELS[entry.template_key] || "Implant Case"}</strong>
+                              {caseSteps.length ? (
+                                <span className="case-card__progress-text">
+                                  已完成 {completedStepCount}/{caseSteps.length} 步
+                                </span>
                               ) : null}
                             </div>
-                            {nextStep ? (
-                              <p className="case-card__next">
-                                下次 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
-                              </p>
-                            ) : (
-                              <p className="case-card__next">尚未設定下次回診</p>
-                            )}
+                            {flowSteps.length ? (
+                              <div className="case-card__flow" aria-label="治療流程進度">
+                                {flowSteps.map((step) => (
+                                  <span
+                                    className={cx(
+                                      "case-card__flow-pill",
+                                      step.status === "completed" &&
+                                        "case-card__flow-pill--completed",
+                                      step.isCurrent && "case-card__flow-pill--current"
+                                    )}
+                                    key={step.id}
+                                  >
+                                    {step.label}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="case-card__next-row">
+                              <span className="case-card__next-label">下次</span>
+                              {nextStep ? (
+                                <>
+                                  <span className="case-card__next-date">
+                                    {formatDate(nextStep.planned_date)}
+                                  </span>
+                                  <span
+                                    className={cx(
+                                      "pill",
+                                      getProcedureToneClass(nextStep.procedure_type)
+                                    )}
+                                  >
+                                    {getPlanStepLabel(nextStep)}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="muted-text">尚未設定回診</span>
+                              )}
+                            </div>
                           </button>
                         );
                       })}
@@ -2190,6 +2261,10 @@ export default function App() {
                             <span className="detail-label">開始日期</span>
                             <strong>{selectedCase.started_on ? formatDate(selectedCase.started_on) : "未設定"}</strong>
                           </div>
+                          <div className="detail-card">
+                            <span className="detail-label">結束日期</span>
+                            <strong>{selectedCaseDeliveryDate ? formatDate(selectedCaseDeliveryDate) : "未完成"}</strong>
+                          </div>
                         </div>
 
                         {selectedCase.diagnosis_notes ? (
@@ -2214,19 +2289,19 @@ export default function App() {
                             </div>
                             <div className="implant-snapshot__grid">
                               <div>
-                                <span className="detail-label">Brand / Model</span>
+                                <span className="detail-label">廠牌</span>
                                 <strong>
                                   {selectedCaseImplant.brand || "-"} {selectedCaseImplant.model || ""}
                                 </strong>
                               </div>
                               <div>
-                                <span className="detail-label">Diameter / Length</span>
+                                <span className="detail-label">直徑 / 長度</span>
                                 <strong>
                                   {selectedCaseImplant.diameter_mm || "-"} / {selectedCaseImplant.length_mm || "-"} mm
                                 </strong>
                               </div>
                               <div>
-                                <span className="detail-label">Placed On</span>
+                                <span className="detail-label">植入</span>
                                 <strong>
                                   {selectedCaseImplant.placed_on
                                     ? formatDate(selectedCaseImplant.placed_on)
