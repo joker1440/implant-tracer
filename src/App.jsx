@@ -46,6 +46,7 @@ import {
   daysFromToday,
   formatDate,
   formatDateTime,
+  formatMonthDayYearChip,
   formatShortMonthDay,
   slugifyFileName,
   todayIso
@@ -1873,40 +1874,43 @@ export default function App() {
                 </div>
                 {upcomingItems.length ? (
                   <div className="agenda-list">
-                    {upcomingItems.map((item) => (
-                      <button
-                        key={item.id}
-                        className="agenda-item"
-                        type="button"
-                        onClick={() => {
-                          setActiveView("patients");
-                          setSelectedPatientId(item.patient.id);
-                          setSelectedCaseId(item.caseEntry.id);
-                        }}
-                      >
-                        <div className="calendar-chip calendar-chip--soft">
-                          <span>{formatShortMonthDay(item.planned_date).month}</span>
-                          <strong>{formatShortMonthDay(item.planned_date).day}</strong>
-                        </div>
-                        <div className="agenda-item__body">
-                          <div className="agenda-item__row">
-                            <div className="agenda-item__person">
-                              <strong>{item.patient.full_name}</strong>
-                              {item.patient.clinic_name ? (
-                                <span className="muted-text">{item.patient.clinic_name}</span>
-                              ) : null}
+                    {upcomingItems.map((item) => {
+                      const chipDate = formatMonthDayYearChip(item.planned_date);
+
+                      return (
+                        <button
+                          key={item.id}
+                          className="agenda-item"
+                          type="button"
+                          onClick={() => {
+                            setActiveView("patients");
+                            setSelectedPatientId(item.patient.id);
+                            setSelectedCaseId(item.caseEntry.id);
+                          }}
+                        >
+                          <div className="calendar-chip calendar-chip--soft">
+                            <span className="calendar-chip__year">{chipDate.year}</span>
+                            <strong className="calendar-chip__value">{chipDate.monthDay}</strong>
+                          </div>
+                          <div className="agenda-item__body">
+                            <div className="agenda-item__row">
+                              <div className="agenda-item__person">
+                                <strong>{item.patient.full_name}</strong>
+                                {item.patient.clinic_name ? (
+                                  <span className="muted-text">{item.patient.clinic_name}</span>
+                                ) : null}
+                              </div>
+                              <span className="tag">{`牙位 ${formatCaseToothLabel(item.caseEntry)}`}</span>
                             </div>
-                            <span className="tag">{formatCaseToothLabel(item.caseEntry)}</span>
+                            <div className="agenda-item__row">
+                              <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                                {getPlanStepLabel(item)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="agenda-item__row">
-                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                              {getPlanStepLabel(item)}
-                            </span>
-                            <span className="muted-text">{formatDate(item.planned_date)}</span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="empty-state">目前沒有待回診病患。</div>

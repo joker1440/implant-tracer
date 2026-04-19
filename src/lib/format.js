@@ -142,6 +142,18 @@ export function formatShortMonthDay(value) {
   };
 }
 
+export function formatMonthDayYearChip(value) {
+  if (!value) {
+    return { year: "----", monthDay: "--/--" };
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+  return {
+    year: String(date.getFullYear()),
+    monthDay: `${date.getMonth() + 1}/${date.getDate()}`
+  };
+}
+
 export function daysFromToday(value) {
   if (!value) {
     return null;

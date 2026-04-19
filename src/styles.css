@@ -787,14 +787,18 @@ img {
 }
 
 .calendar-chip {
-  min-width: 72px;
-  border-radius: 20px;
+  width: 104px;
+  min-width: 104px;
+  aspect-ratio: 1 / 1;
+  border-radius: 28px;
   background: #f9ece9;
   color: #b06d67;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  align-self: flex-start;
+  flex-shrink: 0;
   padding: 12px;
 }
 
@@ -808,9 +812,19 @@ img {
   letter-spacing: 0.14em;
 }
 
+.calendar-chip__year {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+}
+
 .calendar-chip strong {
   font-size: 1.8rem;
   line-height: 1;
+}
+
+.calendar-chip__value {
+  font-size: 2rem;
+  letter-spacing: -0.03em;
 }
 
 .agenda-item__body {
@@ -1921,6 +1935,16 @@ img {
   .empty-state {
     min-height: 108px;
     padding: 16px;
+  }
+
+  .calendar-chip {
+    width: 92px;
+    min-width: 92px;
+    border-radius: 24px;
+  }
+
+  .calendar-chip__value {
+    font-size: 1.75rem;
   }
 
   .photo-draft-card__summary .inline-actions {
