@@ -572,6 +572,19 @@ img {
 .sidebar {
   position: sticky;
   top: 112px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  max-height: calc(100vh - 128px);
+  overflow: hidden;
+}
+
+.sidebar .panel-heading {
+  margin-bottom: 0;
+}
+
+.sidebar .field {
+  margin: 0;
 }
 
 .patient-list,
@@ -587,7 +600,24 @@ img {
 }
 
 .patient-list {
-  margin-top: 10px;
+  margin-top: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.patient-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.patient-list::-webkit-scrollbar-track {
+  background: rgba(120, 100, 86, 0.06);
+  border-radius: 999px;
+}
+
+.patient-list::-webkit-scrollbar-thumb {
+  background: rgba(126, 155, 139, 0.24);
+  border-radius: 999px;
 }
 
 .timeline-list {
@@ -2130,6 +2160,8 @@ img {
 
   .sidebar {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 }
 
