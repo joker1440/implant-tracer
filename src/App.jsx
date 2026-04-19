@@ -473,7 +473,7 @@ export default function App() {
     });
   const selectedCaseVisits = (visitsByCaseId[selectedCaseId] || [])
     .slice()
-    .sort((left, right) => right.visited_on.localeCompare(left.visited_on));
+    .sort((left, right) => left.visited_on.localeCompare(right.visited_on));
   const selectedCaseImplant = selectedCaseId ? caseImplantsByCaseId[selectedCaseId] : null;
   const selectedCasePhotos = (photosByCaseId[selectedCaseId] || []).slice();
   const selectedCaseToothLabel = formatCaseToothLabel(selectedCase);
