@@ -466,14 +466,10 @@ export default function App() {
     });
   const selectedCasePlanSteps = (planStepsByCaseId[selectedCaseId] || [])
     .slice()
-    .sort((left, right) => {
-      if (!left.planned_date) return 1;
-      if (!right.planned_date) return -1;
-      return left.planned_date.localeCompare(right.planned_date);
-    });
+    .sort((left, right) => comparePlanStepsByTimeline(right, left));
   const selectedCaseVisits = (visitsByCaseId[selectedCaseId] || [])
     .slice()
-    .sort((left, right) => left.visited_on.localeCompare(right.visited_on));
+    .sort((left, right) => right.visited_on.localeCompare(left.visited_on));
   const selectedCaseImplant = selectedCaseId ? caseImplantsByCaseId[selectedCaseId] : null;
   const selectedCaseDeliveryDate =
     selectedCaseVisits
@@ -603,7 +599,13 @@ export default function App() {
     .map((visit) => ({
       visit,
       procedures: proceduresByVisitId[visit.id] || [],
-      photos: (photosByVisitId[visit.id] || []).slice()
+      photos: (photosByVisitId[visit.id] || [])
+        .slice()
+        .sort((left, right) => {
+          const leftDate = photoSortDate(left, visitsById);
+          const rightDate = photoSortDate(right, visitsById);
+          return rightDate.localeCompare(leftDate) || String(right.id).localeCompare(String(left.id));
+        })
     }))
     .filter((group) => group.photos.length > 0);
 
@@ -647,8 +649,7 @@ export default function App() {
   const stats = {
     totalCases: records.cases.length,
     activeCases: records.cases.filter((entry) => entry.status === "active").length,
-    totalPatients: records.patients.length,
-    totalPhotos: records.visitPhotos.length
+    totalPatients: records.patients.length
   };
   const procedureFilterOptions = [
     { value: "", label: "全部治療內容" },
@@ -719,7 +720,7 @@ export default function App() {
       const leftDate = photoSortDate(left, visitsById);
       const rightDate = photoSortDate(right, visitsById);
 
-      return leftDate.localeCompare(rightDate) || String(left.id).localeCompare(String(right.id));
+      return rightDate.localeCompare(leftDate) || String(right.id).localeCompare(String(left.id));
     });
   const previewPhoto = selectedCasePhotos.find((photo) => photo.id === photoPreview.photoId);
   const previewPhotoVisit = previewPhoto ? visitsById[previewPhoto.visit_id] : null;
@@ -1870,10 +1871,6 @@ export default function App() {
               <article className="stat-card">
                 <span className="stat-value">{stats.totalPatients}</span>
                 <span className="stat-label">病患數</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-value">{stats.totalPhotos}</span>
-                <span className="stat-label">照片數</span>
               </article>
             </section>
 
