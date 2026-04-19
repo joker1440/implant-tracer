@@ -2424,15 +2424,19 @@ export default function App() {
                             <strong className="calendar-chip__value">{chipDate.monthDay}</strong>
                           </div>
                           <div className="agenda-item__body">
-                            <div className="agenda-item__person">
-                              <strong>{item.patient.full_name}</strong>
-                              {item.patient.clinic_name ? (
-                                <span className="muted-text">{item.patient.clinic_name}</span>
-                              ) : null}
+                            <div className="agenda-item__row">
+                              <div className="agenda-item__person">
+                                <strong>{item.patient.full_name}</strong>
+                                {item.patient.clinic_name ? (
+                                  <span className="muted-text">{item.patient.clinic_name}</span>
+                                ) : null}
+                              </div>
+                              <div className="agenda-item__procedure">
+                                <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                                  {getPlanStepLabel(item)}
+                                </span>
+                              </div>
                             </div>
-                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                              {getPlanStepLabel(item)}
-                            </span>
                           </div>
                           <span className="tag agenda-item__tooth-tag">
                             <span className="agenda-item__tooth-label">牙位</span>
@@ -2476,15 +2480,19 @@ export default function App() {
                             <strong>{monthDay.day}</strong>
                           </div>
                           <div className="agenda-item__body">
-                            <div className="agenda-item__person">
-                              <strong>{item.patient.full_name}</strong>
-                              {item.patient.clinic_name ? (
-                                <span className="muted-text">{item.patient.clinic_name}</span>
-                              ) : null}
+                            <div className="agenda-item__row">
+                              <div className="agenda-item__person">
+                                <strong>{item.patient.full_name}</strong>
+                                {item.patient.clinic_name ? (
+                                  <span className="muted-text">{item.patient.clinic_name}</span>
+                                ) : null}
+                              </div>
+                              <div className="agenda-item__procedure">
+                                <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                                  {getPlanStepLabel(item)}
+                                </span>
+                              </div>
                             </div>
-                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                              {getPlanStepLabel(item)}
-                            </span>
                           </div>
                           <span className="tag agenda-item__tooth-tag">
                             <span className="agenda-item__tooth-label">牙位</span>

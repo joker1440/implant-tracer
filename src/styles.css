@@ -766,6 +766,7 @@ img {
   display: grid;
   gap: 4px;
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .case-grid {
@@ -1174,23 +1175,39 @@ img {
 }
 
 .agenda-item__body {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: stretch;
   flex: 1;
   min-width: 0;
-  align-content: center;
 }
 
 .agenda-item__row {
   justify-content: space-between;
+  align-items: stretch;
   width: 100%;
 }
 
 .agenda-item--upcoming .pill {
-  align-self: flex-start;
-  justify-self: flex-start;
   width: fit-content;
   max-width: max-content;
+}
+
+.agenda-item__procedure {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100%;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.agenda-item__procedure .pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
 }
 
 .agenda-item__tooth-tag {
@@ -2425,16 +2442,21 @@ img {
   }
 
   .agenda-item__body {
-    gap: 3px;
+    align-items: stretch;
   }
 
   .agenda-item__row {
     align-items: center;
     gap: 10px;
+    flex-wrap: nowrap;
   }
 
   .agenda-item__person strong {
     font-size: 1.12rem;
+  }
+
+  .agenda-item__procedure .pill {
+    min-height: 40px;
   }
 
   .agenda-item__tooth-tag {
