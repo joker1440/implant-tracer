@@ -829,12 +829,20 @@ img {
 
 .agenda-item__body {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
 }
 
 .agenda-item__row {
   justify-content: space-between;
+  width: 100%;
+}
+
+.agenda-item__tooth-tag {
+  padding: 9px 16px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #5d544d;
 }
 
 .overdue-text {
@@ -1826,9 +1834,32 @@ img {
   }
 
   .timeline-item,
-  .visit-card__header,
-  .agenda-item {
+  .visit-card__header {
     flex-direction: column;
+  }
+
+  .agenda-item {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .agenda-item__body {
+    gap: 4px;
+  }
+
+  .agenda-item__row {
+    align-items: center;
+    gap: 10px;
+  }
+
+  .agenda-item__person strong {
+    font-size: 1.12rem;
+  }
+
+  .agenda-item__tooth-tag {
+    padding: 10px 16px;
+    font-size: 1.06rem;
   }
 
   .hero-panel {

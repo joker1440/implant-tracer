@@ -1900,7 +1900,9 @@ export default function App() {
                                   <span className="muted-text">{item.patient.clinic_name}</span>
                                 ) : null}
                               </div>
-                              <span className="tag">{`牙位 ${formatCaseToothLabel(item.caseEntry)}`}</span>
+                              <span className="tag agenda-item__tooth-tag">
+                                {`牙位 ${formatCaseToothLabel(item.caseEntry)}`}
+                              </span>
                             </div>
                             <div className="agenda-item__row">
                               <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
