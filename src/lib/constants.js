@@ -1,7 +1,8 @@
 export const NAV_ITEMS = [
   { key: "dashboard", label: "目錄" },
   { key: "patients", label: "病患" },
-  { key: "search", label: "搜尋" }
+  { key: "search", label: "搜尋" },
+  { key: "analytics", label: "統計" }
 ];
 
 export const CASE_STATUS_OPTIONS = [

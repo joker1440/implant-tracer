@@ -677,6 +677,71 @@ export default function App() {
     activeCases: records.cases.filter((entry) => entry.status === "active").length,
     totalPatients: records.patients.length
   };
+  const clinicStats = (() => {
+    const clinicMap = new Map();
+
+    const ensureClinic = (clinicName) => {
+      const key = clinicName || "未設定";
+      if (!clinicMap.has(key)) {
+        clinicMap.set(key, {
+          clinicName: key,
+          patientCount: 0,
+          caseCount: 0,
+          activeCaseCount: 0,
+          upcomingCount: 0,
+          overdueCount: 0
+        });
+      }
+      return clinicMap.get(key);
+    };
+
+    records.patients.forEach((patient) => {
+      ensureClinic(patient.clinic_name).patientCount += 1;
+    });
+
+    records.cases.forEach((caseEntry) => {
+      const clinicName = patientsById[caseEntry.patient_id]?.clinic_name || "未設定";
+      const clinic = ensureClinic(clinicName);
+      clinic.caseCount += 1;
+      if (caseEntry.status === "active") {
+        clinic.activeCaseCount += 1;
+      }
+    });
+
+    upcomingItems.forEach((item) => {
+      ensureClinic(item.patient.clinic_name).upcomingCount += 1;
+    });
+
+    overdueItems.forEach((item) => {
+      ensureClinic(item.patient.clinic_name).overdueCount += 1;
+    });
+
+    return Array.from(clinicMap.values()).sort((left, right) => {
+      return (
+        right.caseCount - left.caseCount ||
+        right.patientCount - left.patientCount ||
+        left.clinicName.localeCompare(right.clinicName)
+      );
+    });
+  })();
+  const procedureStats = Object.entries(
+    records.visitProcedures.reduce((accumulator, procedure) => {
+      const nextCount = accumulator[procedure.procedure_type] || 0;
+      accumulator[procedure.procedure_type] = nextCount + 1;
+      return accumulator;
+    }, {})
+  )
+    .map(([procedureType, count]) => ({
+      procedureType,
+      label: PROCEDURE_LABELS[procedureType] || procedureType,
+      count
+    }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+  const analyticsStats = {
+    totalClinics: clinicStats.length,
+    totalUpcoming: upcomingItems.length,
+    totalOverdue: overdueItems.length
+  };
   const procedureFilterOptions = [
     { value: "", label: "全部治療內容" },
     ...PROCEDURE_OPTIONS
@@ -2840,6 +2905,107 @@ export default function App() {
           </section>
         ) : null}
 
+        {activeView === "analytics" ? (
+          <section className="view-stack">
+            <section className="stats-grid">
+              <article className="stat-card">
+                <span className="stat-value">{analyticsStats.totalClinics}</span>
+                <span className="stat-label">診所數</span>
+              </article>
+              <article className="stat-card">
+                <span className="stat-value">{stats.totalCases}</span>
+                <span className="stat-label">總 Cases</span>
+              </article>
+              <article className="stat-card">
+                <span className="stat-value">{analyticsStats.totalUpcoming}</span>
+                <span className="stat-label">即將回診</span>
+              </article>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Analytics</p>
+                  <h3>各診所 Case 統計</h3>
+                </div>
+              </div>
+
+              {clinicStats.length ? (
+                <div className="analytics-clinic-grid">
+                  {clinicStats.map((clinic) => (
+                    <article className="analytics-card" key={clinic.clinicName}>
+                      <div className="analytics-card__header">
+                        <strong>{clinic.clinicName}</strong>
+                        <span className="tag">{clinic.caseCount} cases</span>
+                      </div>
+                      <div className="analytics-card__hero">
+                        <span className="analytics-card__value">{clinic.caseCount}</span>
+                        <span className="analytics-card__label">Case 數量</span>
+                      </div>
+                      <div className="analytics-card__meta">
+                        <span>病患 {clinic.patientCount}</span>
+                        <span>進行中 {clinic.activeCaseCount}</span>
+                        <span>即將回診 {clinic.upcomingCount}</span>
+                        <span>逾期 {clinic.overdueCount}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">目前沒有可統計的診所資料。</div>
+              )}
+            </section>
+
+            <section className="dual-columns">
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Breakdown</p>
+                    <h3>各診所明細</h3>
+                  </div>
+                </div>
+                {clinicStats.length ? (
+                  <div className="analytics-table">
+                    {clinicStats.map((clinic) => (
+                      <div className="analytics-table__row" key={clinic.clinicName}>
+                        <strong>{clinic.clinicName}</strong>
+                        <span>{clinic.patientCount} 位病患</span>
+                        <span>{clinic.caseCount} 個 case</span>
+                        <span>{clinic.activeCaseCount} 進行中</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">尚無診所明細。</div>
+                )}
+              </section>
+
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Procedures</p>
+                    <h3>治療內容累計</h3>
+                  </div>
+                </div>
+                {procedureStats.length ? (
+                  <div className="analytics-chip-grid">
+                    {procedureStats.map((item) => (
+                      <div className="analytics-chip-card" key={item.procedureType}>
+                        <span className={cx("pill", getProcedureToneClass(item.procedureType))}>
+                          {item.label}
+                        </span>
+                        <strong>{item.count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">尚無治療內容紀錄可統計。</div>
+                )}
+              </section>
+            </section>
+          </section>
+        ) : null}
+
       </main>
 
       <Modal
@@ -3028,6 +3194,20 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              <label className="field">
+                <span>開始日期</span>
+                <DateInput
+                  value={caseModal.values.started_on}
+                  shortcuts={todayShortcuts}
+                  onChange={(nextValue) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, started_on: nextValue }
+                    }))
+                  }
+                />
+              </label>
 
               <label className="field field--full">
                 <span>備註</span>
