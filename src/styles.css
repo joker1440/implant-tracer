@@ -92,7 +92,6 @@ img {
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: 18px;
   background: linear-gradient(to bottom, #f7f2ec 0%, #f7f2ec 80%, rgba(247, 242, 236, 0.92) 100%);
-  z-index: 30;
 }
 
 .topbar {
@@ -511,6 +510,10 @@ img {
   gap: 14px;
 }
 
+.patient-list {
+  margin-top: 10px;
+}
+
 .timeline-list {
   gap: 10px;
 }
@@ -562,12 +565,19 @@ img {
   min-width: 0;
 }
 
-.case-grid,
-.photo-grid,
-.photo-draft-grid {
+.case-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
+}
+
+.photo-grid,
+.photo-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 180px));
+  gap: 12px;
+  justify-content: flex-start;
+  align-items: start;
 }
 
 .upload-feedback {
@@ -685,8 +695,48 @@ img {
 }
 
 .pill--green {
-  background: var(--success-soft);
-  color: #587964;
+  background: #dfe9e2;
+  color: #5f7668;
+}
+
+.pill--butter {
+  background: #efe5bf;
+  color: #857042;
+}
+
+.pill--honey {
+  background: #efdfb7;
+  color: #907047;
+}
+
+.pill--oat {
+  background: #eee4cc;
+  color: #867150;
+}
+
+.pill--wheat {
+  background: #ece2bb;
+  color: #7e6d45;
+}
+
+.pill--custard {
+  background: #f0e7c8;
+  color: #8a7650;
+}
+
+.pill--linen {
+  background: #f2ead6;
+  color: #7f7158;
+}
+
+.pill--cream {
+  background: #f4ecd9;
+  color: #86775f;
+}
+
+.pill--biscuit {
+  background: #eadfc8;
+  color: #876d4f;
 }
 
 .pill--danger {
@@ -695,53 +745,53 @@ img {
 }
 
 .pill--rose {
-  background: var(--rose-soft);
-  color: var(--rose-text);
+  background: #f2e3de;
+  color: #966861;
 }
 
 .pill--sand {
-  background: var(--sand-soft);
-  color: var(--sand-text);
+  background: #eee5d7;
+  color: #8b7358;
 }
 
 .pill--mist {
-  background: var(--mist-soft);
-  color: var(--mist-text);
+  background: #e4ecef;
+  color: #6c808a;
 }
 
 .pill--amber {
-  background: var(--amber-soft);
-  color: var(--amber-text);
+  background: #efe1cd;
+  color: #997b57;
 }
 
 .pill--petal {
-  background: #f3e3ea;
-  color: #8d6275;
+  background: #eee2e7;
+  color: #866b78;
 }
 
 .pill--mint {
-  background: var(--mint-soft);
-  color: var(--mint-text);
+  background: #deece8;
+  color: #648172;
 }
 
 .pill--lavender {
-  background: var(--lavender-soft);
-  color: var(--lavender-text);
+  background: #e7e0ee;
+  color: #7a6b8d;
 }
 
 .pill--sky {
-  background: var(--sky-soft);
-  color: var(--sky-text);
+  background: #e1ebef;
+  color: #647f89;
 }
 
 .pill--gold {
-  background: var(--gold-soft);
-  color: var(--gold-text);
+  background: #ece1cb;
+  color: #897649;
 }
 
 .pill--sage {
-  background: rgba(229, 239, 231, 0.95);
-  color: #627d6f;
+  background: #e5ece3;
+  color: #6a7d6e;
 }
 
 .pill--stone {
@@ -793,10 +843,20 @@ img {
   margin-top: 16px;
 }
 
-.implant-snapshot__grid {
-  margin-top: 14px;
+.implant-snapshot--inline {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 20px;
+}
+
+.implant-snapshot__title {
+  white-space: nowrap;
+}
+
+.implant-snapshot__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -863,15 +923,16 @@ img {
 
 .agenda-item {
   display: flex;
-  align-items: stretch;
-  gap: 16px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
 }
 
 .calendar-chip {
-  width: 104px;
-  min-width: 104px;
+  width: 96px;
+  min-width: 96px;
   aspect-ratio: 1 / 1;
-  border-radius: 28px;
+  border-radius: 26px;
   background: #f9ece9;
   color: #b06d67;
   display: flex;
@@ -894,24 +955,26 @@ img {
 }
 
 .calendar-chip__year {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   letter-spacing: 0.08em;
 }
 
 .calendar-chip strong {
-  font-size: 1.8rem;
+  font-size: 1.7rem;
   line-height: 1;
 }
 
 .calendar-chip__value {
-  font-size: 2rem;
+  font-size: 1.9rem;
   letter-spacing: -0.03em;
 }
 
 .agenda-item__body {
   display: grid;
-  gap: 6px;
-  width: 100%;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  align-content: center;
 }
 
 .agenda-item__row {
@@ -919,26 +982,33 @@ img {
   width: 100%;
 }
 
+.agenda-item--upcoming .pill {
+  align-self: flex-start;
+  justify-self: flex-start;
+  width: fit-content;
+  max-width: max-content;
+}
+
 .agenda-item__tooth-tag {
-  width: 104px;
-  min-width: 104px;
+  width: 96px;
+  min-width: 96px;
   aspect-ratio: 1 / 1;
-  padding: 12px;
+  padding: 10px;
   display: grid;
   place-items: center;
   gap: 4px;
   color: #5d544d;
   text-align: center;
-  border-radius: 28px;
+  border-radius: 26px;
 }
 
 .agenda-item__tooth-label {
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   letter-spacing: 0.08em;
 }
 
 .agenda-item__tooth-value {
-  font-size: 1.9rem;
+  font-size: 1.8rem;
   line-height: 1;
   margin: 0;
 }
@@ -1089,7 +1159,7 @@ img {
 }
 
 .photo-card__body {
-  padding: 14px 14px 16px;
+  padding: 10px 10px 12px;
 }
 
 .photo-card__actions {
@@ -1194,14 +1264,14 @@ img {
 }
 
 .compare-view__multi-grid {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
 .compare-view__panel {
   display: grid;
   gap: 8px;
-  padding: 18px;
-  border-radius: 22px;
+  padding: 14px;
+  border-radius: 20px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.76);
 }
@@ -1212,18 +1282,18 @@ img {
 }
 
 .compare-view__image-frame {
-  border-radius: 20px;
+  border-radius: 18px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.76);
   border: 1px solid rgba(120, 100, 86, 0.12);
-  min-height: 320px;
+  min-height: 220px;
   display: grid;
   place-items: center;
 }
 
 .compare-view__image {
   width: 100%;
-  height: 320px;
+  height: 220px;
   object-fit: contain;
   background: #fff;
 }
@@ -1372,6 +1442,12 @@ img {
   gap: 10px;
 }
 
+.pill-option-wrap {
+  position: relative;
+  display: inline-flex;
+  isolation: isolate;
+}
+
 .pill-select--dense {
   gap: 8px;
 }
@@ -1394,6 +1470,58 @@ img {
     color 180ms ease;
 }
 
+.pill-option--deletable {
+  padding-right: 30px;
+}
+
+.pill-option__delete {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(132, 112, 96, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #8a7365;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.92);
+  z-index: 2;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+  box-shadow: 0 8px 16px rgba(95, 77, 64, 0.08);
+}
+
+.pill-option-wrap:hover .pill-option__delete,
+.pill-option-wrap:focus-within .pill-option__delete {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.pill-option__delete:hover {
+  border-color: rgba(184, 116, 107, 0.24);
+  color: #aa645d;
+}
+
+@media (hover: none) {
+  .pill-option-wrap--deletable .pill-option__delete {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1);
+  }
+}
+
 .pill-option:hover {
   transform: translateY(-1px);
 }
@@ -1409,59 +1537,107 @@ img {
 }
 
 .pill-option.pill--rose.is-active {
-  background: #f6dfdb;
-  border-color: rgba(168, 110, 105, 0.28);
-  color: #955c57;
+  background: #ecd6d2;
+  border-color: rgba(164, 112, 103, 0.26);
+  color: #8b615b;
+}
+
+.pill-option.pill--butter.is-active {
+  background: #e8deb7;
+  border-color: rgba(145, 124, 74, 0.24);
+  color: #7e6a3f;
+}
+
+.pill-option.pill--honey.is-active {
+  background: #e7d8ad;
+  border-color: rgba(150, 121, 71, 0.24);
+  color: #886a40;
+}
+
+.pill-option.pill--oat.is-active {
+  background: #e7dcc2;
+  border-color: rgba(135, 115, 80, 0.22);
+  color: #7e6b4a;
+}
+
+.pill-option.pill--wheat.is-active {
+  background: #e4d9af;
+  border-color: rgba(136, 118, 70, 0.22);
+  color: #796840;
+}
+
+.pill-option.pill--custard.is-active {
+  background: #e8dfbd;
+  border-color: rgba(140, 120, 77, 0.22);
+  color: #7f6c49;
+}
+
+.pill-option.pill--linen.is-active {
+  background: #e9e0cb;
+  border-color: rgba(129, 116, 89, 0.2);
+  color: #786b53;
+}
+
+.pill-option.pill--cream.is-active {
+  background: #ece3cf;
+  border-color: rgba(133, 119, 92, 0.2);
+  color: #7f7058;
+}
+
+.pill-option.pill--biscuit.is-active {
+  background: #e2d7bf;
+  border-color: rgba(135, 111, 80, 0.22);
+  color: #7d6547;
 }
 
 .pill-option.pill--sand.is-active {
-  background: #f1e2c8;
-  border-color: rgba(146, 118, 84, 0.28);
-  color: #7f6444;
+  background: #e7dbc8;
+  border-color: rgba(142, 118, 83, 0.24);
+  color: #7f6a4d;
 }
 
 .pill-option.pill--mist.is-active {
-  background: #dfe8f6;
-  border-color: rgba(111, 130, 163, 0.28);
-  color: #5f7394;
+  background: #dae6ea;
+  border-color: rgba(99, 126, 137, 0.24);
+  color: #617882;
 }
 
 .pill-option.pill--amber.is-active {
-  background: #f4e3c1;
-  border-color: rgba(160, 124, 72, 0.28);
-  color: #8d6a38;
+  background: #e9dbc4;
+  border-color: rgba(151, 125, 86, 0.24);
+  color: #8a7350;
 }
 
 .pill-option.pill--petal.is-active {
-  background: #ecd6e1;
-  border-color: rgba(141, 98, 117, 0.28);
-  color: #7d5266;
+  background: #e7d9df;
+  border-color: rgba(139, 107, 121, 0.22);
+  color: #7f6773;
 }
 
 .pill-option.pill--green.is-active,
 .pill-option.pill--mint.is-active,
 .pill-option.pill--sage.is-active {
-  background: #ddece1;
-  border-color: rgba(95, 134, 109, 0.28);
-  color: #52715c;
+  background: #d9e5de;
+  border-color: rgba(99, 126, 110, 0.24);
+  color: #5d7367;
 }
 
 .pill-option.pill--lavender.is-active {
-  background: #e7dcf5;
-  border-color: rgba(136, 109, 166, 0.28);
-  color: #785c97;
+  background: #e2daed;
+  border-color: rgba(125, 108, 148, 0.22);
+  color: #77678b;
 }
 
 .pill-option.pill--sky.is-active {
-  background: #dcebf1;
-  border-color: rgba(95, 130, 144, 0.28);
-  color: #547381;
+  background: #dae5ea;
+  border-color: rgba(100, 127, 136, 0.22);
+  color: #627d86;
 }
 
 .pill-option.pill--gold.is-active {
-  background: #efe2bc;
-  border-color: rgba(156, 128, 63, 0.28);
-  color: #876c2f;
+  background: #e7ddca;
+  border-color: rgba(140, 120, 73, 0.22);
+  color: #827148;
 }
 
 .pill-option.pill--stone.is-active {
@@ -1475,9 +1651,30 @@ img {
   font-size: 0.88rem;
 }
 
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.clinic-builder {
+  display: grid;
+  gap: 12px;
+}
+
+.clinic-builder__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
 .field span {
   font-size: 0.92rem;
   color: var(--muted);
+}
+
+.sidebar .field {
+  margin-bottom: 8px;
 }
 
 .field input,
@@ -1949,7 +2146,7 @@ img {
   }
 
   .photo-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tooth-picker__row--compact {
@@ -1964,11 +2161,11 @@ img {
   .agenda-item {
     flex-direction: row;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
   }
 
   .agenda-item__body {
-    gap: 4px;
+    gap: 3px;
   }
 
   .agenda-item__row {
@@ -1981,14 +2178,14 @@ img {
   }
 
   .agenda-item__tooth-tag {
-    width: 92px;
-    min-width: 92px;
-    padding: 10px;
-    border-radius: 24px;
+    width: 82px;
+    min-width: 82px;
+    padding: 8px;
+    border-radius: 22px;
   }
 
   .agenda-item__tooth-value {
-    font-size: 1.7rem;
+    font-size: 1.55rem;
   }
 
   .case-card__title-row {
@@ -2029,7 +2226,7 @@ img {
   .photo-card img {
     object-fit: contain;
     background: rgba(247, 243, 238, 0.92);
-    max-height: 280px;
+    max-height: 150px;
   }
 
   .photo-action-button {
@@ -2046,11 +2243,11 @@ img {
   }
 
   .compare-view__image-frame {
-    min-height: 240px;
+    min-height: 160px;
   }
 
   .compare-view__image {
-    height: 240px;
+    height: 160px;
   }
 
   .topbar__actions {
@@ -2108,19 +2305,28 @@ img {
     padding: 14px;
   }
 
+  .patient-list {
+    margin-top: 12px;
+    gap: 12px;
+  }
+
+  .clinic-builder__row {
+    grid-template-columns: 1fr;
+  }
+
   .empty-state {
     min-height: 108px;
     padding: 16px;
   }
 
   .calendar-chip {
-    width: 92px;
-    min-width: 92px;
-    border-radius: 24px;
+    width: 82px;
+    min-width: 82px;
+    border-radius: 22px;
   }
 
   .calendar-chip__value {
-    font-size: 1.75rem;
+    font-size: 1.55rem;
   }
 
   .photo-draft-card__summary .inline-actions {
@@ -2131,6 +2337,11 @@ img {
 
   .photo-draft-card__summary .inline-actions > * {
     width: 100%;
+  }
+
+  .implant-snapshot--inline {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .modal-backdrop {

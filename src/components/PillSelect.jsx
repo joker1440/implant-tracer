@@ -5,23 +5,46 @@ export default function PillSelect({
   options,
   onChange,
   getToneClass,
-  className = ""
+  className = "",
+  onDeleteOption,
+  isOptionDeletable
 }) {
   return (
     <div className={cx("pill-select", className)}>
       {options.map((option) => (
-        <button
-          key={option.value || "__empty__"}
+        <div
           className={cx(
-            "pill-option",
-            getToneClass?.(option.value),
-            value === option.value && "is-active"
+            "pill-option-wrap",
+            onDeleteOption && isOptionDeletable?.(option.value) && "pill-option-wrap--deletable"
           )}
-          type="button"
-          onClick={() => onChange(option.value)}
+          key={option.value || "__empty__"}
         >
-          {option.label}
-        </button>
+          <button
+            className={cx(
+              "pill-option",
+              onDeleteOption && isOptionDeletable?.(option.value) && "pill-option--deletable",
+              getToneClass?.(option.value),
+              value === option.value && "is-active"
+            )}
+            type="button"
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+          {onDeleteOption && isOptionDeletable?.(option.value) ? (
+            <button
+              className="pill-option__delete"
+              type="button"
+              aria-label={`刪除 ${option.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onDeleteOption(option.value);
+              }}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
       ))}
     </div>
   );

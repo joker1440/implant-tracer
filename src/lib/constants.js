@@ -1,5 +1,5 @@
 export const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard" },
+  { key: "dashboard", label: "目錄" },
   { key: "patients", label: "病患" },
   { key: "search", label: "搜尋" }
 ];

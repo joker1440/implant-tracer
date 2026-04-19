@@ -25,7 +25,6 @@ import {
   TEMPLATE_LABELS
 } from "./lib/constants";
 import {
-  buildCsvFromCases,
   buildPlanStepsFromTemplate,
   createEmptyCase,
   createEmptyPatient,
@@ -55,6 +54,7 @@ import { isSupabaseConfigured, supabase } from "./lib/supabase";
 
 const INITIAL_RECORDS = {
   patients: [],
+  clinics: [],
   cases: [],
   planSteps: [],
   visits: [],
@@ -195,10 +195,12 @@ export default function App() {
     kind: "existing",
     index: -1
   });
+  const [clinicCatalogFallback, setClinicCatalogFallback] = useState(false);
   const [patientModal, setPatientModal] = useState({
     open: false,
     mode: "create",
     patientId: "",
+    clinicDraft: "",
     values: createEmptyPatient()
   });
   const [caseModal, setCaseModal] = useState({
@@ -285,6 +287,11 @@ export default function App() {
 
     const queries = [
       supabase.from("patients").select("*").order("created_at", { ascending: false }),
+      supabase
+        .from("clinics")
+        .select("*")
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true }),
       supabase.from("cases").select("*").order("created_at", { ascending: false }),
       supabase
         .from("case_plan_steps")
@@ -308,6 +315,7 @@ export default function App() {
 
     const [
       patientsResult,
+      clinicsResult,
       casesResult,
       planStepsResult,
       visitsResult,
@@ -338,6 +346,23 @@ export default function App() {
       return;
     }
 
+    const clinicCatalogMissing = Boolean(
+      clinicsResult?.error &&
+        (
+          clinicsResult.error.code === "42P01" ||
+          clinicsResult.error.code === "PGRST205" ||
+          /clinics/i.test(clinicsResult.error.message || "")
+        )
+    );
+
+    if (clinicsResult?.error && !clinicCatalogMissing) {
+      setErrorMessage(clinicsResult.error.message);
+      setLoadingData(false);
+      return;
+    }
+
+    setClinicCatalogFallback(clinicCatalogMissing);
+
     const hydratedPhotos = await Promise.all(
       (photosResult.data || []).map(async (photo) => {
         const signedUrlResult = await supabase.storage
@@ -352,6 +377,7 @@ export default function App() {
 
     setRecords({
       patients: patientsResult.data || [],
+      clinics: clinicCatalogMissing ? [] : clinicsResult.data || [],
       cases: casesResult.data || [],
       planSteps: planStepsResult.data || [],
       visits: visitsResult.data || [],
@@ -655,7 +681,22 @@ export default function App() {
     { value: "", label: "全部治療內容" },
     ...PROCEDURE_OPTIONS
   ];
-  const clinicSelectionOptions = [{ value: "", label: "未設定" }, ...CLINIC_OPTIONS];
+  const persistedClinicOptions = records.clinics.map((clinic) => ({
+    value: clinic.name,
+    label: clinic.name
+  }));
+  const clinicBaseOptions =
+    clinicCatalogFallback && !records.clinics.length ? CLINIC_OPTIONS : persistedClinicOptions;
+  const clinicSelectionOptions = [{ value: "", label: "未設定" }, ...clinicBaseOptions];
+  if (
+    patientModal.values.clinic_name &&
+    !clinicSelectionOptions.some((option) => option.value === patientModal.values.clinic_name)
+  ) {
+    clinicSelectionOptions.push({
+      value: patientModal.values.clinic_name,
+      label: patientModal.values.clinic_name
+    });
+  }
   const membraneSelectionOptions = [{ value: "", label: "未設定" }, ...MEMBRANE_OPTIONS];
   const photoLabelSelectionOptions = [{ value: "", label: "未設定" }, ...PHOTO_LABEL_OPTIONS.map((option) => ({
     value: option,
@@ -761,6 +802,7 @@ export default function App() {
       open: true,
       mode,
       patientId: patient?.id || "",
+      clinicDraft: "",
       values: patient
         ? {
             full_name: patient.full_name || "",
@@ -775,6 +817,118 @@ export default function App() {
 
   function closePatientModal() {
     setPatientModal((current) => ({ ...current, open: false }));
+  }
+
+  async function handleCreateClinic() {
+    if (!supabase || !session?.user) {
+      return;
+    }
+
+    if (clinicCatalogFallback) {
+      setErrorMessage("請先執行 clinics migration，才能新增自訂診所。");
+      return;
+    }
+
+    const clinicName = patientModal.clinicDraft.trim();
+    if (!clinicName) {
+      return;
+    }
+
+    const existingClinic = records.clinics.find((clinic) => clinic.name === clinicName);
+    if (existingClinic) {
+      setPatientModal((current) => ({
+        ...current,
+        clinicDraft: "",
+        values: { ...current.values, clinic_name: clinicName }
+      }));
+      return;
+    }
+
+    setBusyLabel("新增診所中");
+    setErrorMessage("");
+
+    const nextSortOrder =
+      records.clinics.reduce(
+        (maxSortOrder, clinic) => Math.max(maxSortOrder, Number(clinic.sort_order) || 0),
+        0
+      ) + 1;
+
+    const { data, error } = await supabase
+      .from("clinics")
+      .insert({
+        owner_user_id: session.user.id,
+        name: clinicName,
+        sort_order: nextSortOrder
+      })
+      .select("*")
+      .single();
+
+    setBusyLabel("");
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setRecords((current) => ({
+      ...current,
+      clinics: [...current.clinics, data].sort((left, right) => {
+        const leftSort = Number(left.sort_order) || 0;
+        const rightSort = Number(right.sort_order) || 0;
+        return leftSort - rightSort || left.name.localeCompare(right.name);
+      })
+    }));
+    setPatientModal((current) => ({
+      ...current,
+      clinicDraft: "",
+      values: { ...current.values, clinic_name: clinicName }
+    }));
+  }
+
+  async function handleDeleteClinic(clinicName) {
+    if (!supabase || !session?.user || !clinicName) {
+      return;
+    }
+
+    if (clinicCatalogFallback) {
+      setErrorMessage("請先執行 clinics migration，才能管理自訂診所。");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "刪除此診所後，之後新增或編輯病患時將不再顯示這個診所；已經存在的病患資料不會被清空。確定刪除嗎？"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyLabel("刪除診所中");
+    setErrorMessage("");
+
+    const { error } = await supabase
+      .from("clinics")
+      .delete()
+      .eq("owner_user_id", session.user.id)
+      .eq("name", clinicName);
+
+    setBusyLabel("");
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setRecords((current) => ({
+      ...current,
+      clinics: current.clinics.filter((clinic) => clinic.name !== clinicName)
+    }));
+    setPatientModal((current) => ({
+      ...current,
+      values: {
+        ...current.values,
+        clinic_name: current.values.clinic_name === clinicName ? "" : current.values.clinic_name
+      }
+    }));
   }
 
   function openCaseModal(mode, caseEntry = null, patientId = selectedPatientId) {
@@ -1705,25 +1859,6 @@ export default function App() {
     }
   }
 
-  function handleExportCsv() {
-    const csv = buildCsvFromCases({
-      cases: records.cases,
-      patientsById,
-      planStepsByCaseId,
-      visitsByCaseId,
-      caseImplantsByCaseId,
-      caseDisplayNoById
-    });
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `implant-tracker-${todayIso()}.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
   if (!isSupabaseConfigured) {
     return (
       <main className="setup-screen">
@@ -1829,9 +1964,6 @@ export default function App() {
           </div>
 
           <div className="topbar__actions">
-            <button className="secondary-button" type="button" onClick={handleExportCsv}>
-              匯出 CSV
-            </button>
             <button className="ghost-button" type="button" onClick={loadAppData}>
               重新整理
             </button>
@@ -1890,7 +2022,7 @@ export default function App() {
                       return (
                         <button
                           key={item.id}
-                          className="agenda-item"
+                          className="agenda-item agenda-item--upcoming"
                           type="button"
                           onClick={() => {
                             setActiveView("patients");
@@ -1903,26 +2035,22 @@ export default function App() {
                             <strong className="calendar-chip__value">{chipDate.monthDay}</strong>
                           </div>
                           <div className="agenda-item__body">
-                            <div className="agenda-item__row">
-                              <div className="agenda-item__person">
-                                <strong>{item.patient.full_name}</strong>
-                                {item.patient.clinic_name ? (
-                                  <span className="muted-text">{item.patient.clinic_name}</span>
-                                ) : null}
-                              </div>
-                              <span className="tag agenda-item__tooth-tag">
-                                <span className="agenda-item__tooth-label">牙位</span>
-                                <strong className="agenda-item__tooth-value">
-                                  {formatCaseToothLabel(item.caseEntry)}
-                                </strong>
-                              </span>
+                            <div className="agenda-item__person">
+                              <strong>{item.patient.full_name}</strong>
+                              {item.patient.clinic_name ? (
+                                <span className="muted-text">{item.patient.clinic_name}</span>
+                              ) : null}
                             </div>
-                            <div className="agenda-item__row">
-                              <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                                {getPlanStepLabel(item)}
-                              </span>
-                            </div>
+                            <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
+                              {getPlanStepLabel(item)}
+                            </span>
                           </div>
+                          <span className="tag agenda-item__tooth-tag">
+                            <span className="agenda-item__tooth-label">牙位</span>
+                            <strong className="agenda-item__tooth-value">
+                              {formatCaseToothLabel(item.caseEntry)}
+                            </strong>
+                          </span>
                         </button>
                       );
                     })}
@@ -2282,11 +2410,8 @@ export default function App() {
                         ) : null}
 
                         {selectedCaseImplant ? (
-                          <div className="implant-snapshot">
-                            <div>
-                              <p className="eyebrow">Implant Snapshot</p>
-                              <h4>最新植體資訊</h4>
-                            </div>
+                          <div className="implant-snapshot implant-snapshot--inline">
+                            <span className="detail-label implant-snapshot__title">植體資訊</span>
                             <div className="implant-snapshot__grid">
                               <div>
                                 <span className="detail-label">廠牌</span>
@@ -2756,16 +2881,37 @@ export default function App() {
           </label>
           <div className="field field--full">
             <span>診所</span>
-            <PillSelect
-              value={patientModal.values.clinic_name}
-              options={clinicSelectionOptions}
-              onChange={(nextValue) =>
-                setPatientModal((current) => ({
-                  ...current,
-                  values: { ...current.values, clinic_name: nextValue }
-                }))
-              }
-            />
+            <div className="clinic-builder">
+              <PillSelect
+                value={patientModal.values.clinic_name}
+                options={clinicSelectionOptions}
+                onChange={(nextValue) =>
+                  setPatientModal((current) => ({
+                    ...current,
+                    values: { ...current.values, clinic_name: nextValue }
+                  }))
+                }
+                onDeleteOption={handleDeleteClinic}
+                isOptionDeletable={(optionValue) =>
+                  Boolean(optionValue) && !clinicCatalogFallback
+                }
+              />
+              <div className="clinic-builder__row">
+                <input
+                  value={patientModal.clinicDraft}
+                  onChange={(event) =>
+                    setPatientModal((current) => ({
+                      ...current,
+                      clinicDraft: event.target.value
+                    }))
+                  }
+                  placeholder="新增診所名稱"
+                />
+                <button className="secondary-button" type="button" onClick={handleCreateClinic}>
+                  新增診所
+                </button>
+              </div>
+            </div>
           </div>
           <label className="field field--full">
             <span>注意事項</span>
@@ -3764,7 +3910,7 @@ export default function App() {
             open: false
           }))
         }
-        width="xwide"
+        width="wide"
       >
         {selectedComparePhotos.length >= 2 ? (
           <div className="compare-view">
