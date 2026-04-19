@@ -351,6 +351,7 @@ img {
 .page {
   margin-top: 0;
   padding-top: 0;
+  overscroll-behavior-y: none;
 }
 
 .view-stack {
@@ -576,7 +577,7 @@ img {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 14px;
   max-height: calc(100vh - 128px);
-  overflow: hidden;
+  min-height: 0;
 }
 
 .sidebar .panel-heading {
@@ -585,6 +586,10 @@ img {
 
 .sidebar .field {
   margin: 0;
+}
+
+.mobile-only {
+  display: none;
 }
 
 .patient-list,
@@ -604,6 +609,8 @@ img {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .patient-list::-webkit-scrollbar {
@@ -618,6 +625,54 @@ img {
 .patient-list::-webkit-scrollbar-thumb {
   background: rgba(126, 155, 139, 0.24);
   border-radius: 999px;
+}
+
+.mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(52, 42, 36, 0.2);
+  display: grid;
+  align-items: end;
+  padding: 16px;
+}
+
+.mobile-sheet {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  border-radius: 28px 28px 0 0;
+  box-shadow: var(--shadow);
+  padding: 14px 16px 18px;
+  display: grid;
+  gap: 14px;
+  max-height: min(82vh, 760px);
+}
+
+.mobile-sheet__grabber {
+  width: 52px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(132, 112, 96, 0.2);
+  justify-self: center;
+}
+
+.mobile-sheet__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-sheet__search {
+  margin: 0;
+}
+
+.mobile-sheet .patient-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
 }
 
 .timeline-list {
@@ -1978,6 +2033,8 @@ img {
 .modal-body {
   overflow: auto;
   padding: 28px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-actions {
@@ -2159,9 +2216,11 @@ img {
   }
 
   .sidebar {
-    position: static;
-    max-height: none;
-    overflow: visible;
+    display: none;
+  }
+
+  .mobile-only {
+    display: inline-flex;
   }
 }
 

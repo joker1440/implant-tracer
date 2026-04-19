@@ -195,6 +195,7 @@ export default function App() {
     kind: "existing",
     index: -1
   });
+  const [patientSheetOpen, setPatientSheetOpen] = useState(false);
   const [clinicCatalogFallback, setClinicCatalogFallback] = useState(false);
   const [patientModal, setPatientModal] = useState({
     open: false,
@@ -994,6 +995,43 @@ export default function App() {
         clinic_name: current.values.clinic_name === clinicName ? "" : current.values.clinic_name
       }
     }));
+  }
+
+  function renderPatientList(onPatientSelect) {
+    return (
+      <div className="patient-list">
+        {filteredPatients.map((patient) => {
+          const patientCases = records.cases.filter((entry) => entry.patient_id === patient.id);
+
+          return (
+            <button
+              key={patient.id}
+              className={cx("patient-item", selectedPatientId === patient.id && "is-selected")}
+              type="button"
+              onClick={() => {
+                setSelectedPatientId(patient.id);
+                setActiveView("patients");
+                onPatientSelect?.();
+              }}
+            >
+              <div className="patient-item__title">
+                <strong>{patient.full_name}</strong>
+                {patient.attention_alert ? <span className="warning-dot" /> : null}
+              </div>
+              <div className="patient-item__meta">
+                <span>
+                  {patient.birth_date
+                    ? `${calculateAge(patient.birth_date) ?? "-"} 歲`
+                    : "未設定生日"}
+                </span>
+                <span>{patientCases.length} case(s)</span>
+              </div>
+            </button>
+          );
+        })}
+        {!filteredPatients.length ? <div className="empty-state">查無病患。</div> : null}
+      </div>
+    );
   }
 
   function openCaseModal(mode, caseEntry = null, patientId = selectedPatientId) {
@@ -2196,45 +2234,7 @@ export default function App() {
                   placeholder="姓名 / 生日 / 注意事項"
                 />
               </label>
-
-              <div className="patient-list">
-                {filteredPatients.map((patient) => {
-                  const patientCases = records.cases.filter(
-                    (entry) => entry.patient_id === patient.id
-                  );
-
-                  return (
-                    <button
-                      key={patient.id}
-                      className={cx(
-                        "patient-item",
-                        selectedPatientId === patient.id && "is-selected"
-                      )}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPatientId(patient.id);
-                        setActiveView("patients");
-                      }}
-                    >
-                      <div className="patient-item__title">
-                        <strong>{patient.full_name}</strong>
-                        {patient.attention_alert ? <span className="warning-dot" /> : null}
-                      </div>
-                      <div className="patient-item__meta">
-                        <span>
-                          {patient.birth_date
-                            ? `${calculateAge(patient.birth_date) ?? "-"} 歲`
-                            : "未設定生日"}
-                        </span>
-                        <span>{patientCases.length} case(s)</span>
-                      </div>
-                    </button>
-                  );
-                })}
-                {!filteredPatients.length ? (
-                  <div className="empty-state">查無病患。</div>
-                ) : null}
-              </div>
+              {renderPatientList()}
             </aside>
 
             <section className="view-stack">
@@ -2247,6 +2247,13 @@ export default function App() {
                         <h3>{selectedPatient.full_name}</h3>
                       </div>
                       <div className="inline-actions">
+                        <button
+                          className="secondary-button mobile-only"
+                          type="button"
+                          onClick={() => setPatientSheetOpen(true)}
+                        >
+                          切換病患
+                        </button>
                         <button
                           className="secondary-button"
                           type="button"
@@ -3116,6 +3123,55 @@ export default function App() {
           </div>
         </form>
       </Modal>
+
+      {activeView === "patients" && patientSheetOpen ? (
+        <div
+          className="mobile-sheet-backdrop"
+          onClick={() => setPatientSheetOpen(false)}
+          role="presentation"
+        >
+          <section
+            className="mobile-sheet"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-sheet__grabber" />
+            <div className="mobile-sheet__header">
+              <div>
+                <p className="eyebrow">Patients</p>
+                <h3>切換病患</h3>
+              </div>
+              <div className="inline-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => {
+                    setPatientSheetOpen(false);
+                    openPatientModal("create");
+                  }}
+                >
+                  新增病患
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setPatientSheetOpen(false)}
+                >
+                  關閉
+                </button>
+              </div>
+            </div>
+            <label className="field mobile-sheet__search">
+              <span>搜尋病患</span>
+              <input
+                value={patientQuery}
+                onChange={(event) => setPatientQuery(event.target.value)}
+                placeholder="姓名 / 生日 / 注意事項"
+              />
+            </label>
+            {renderPatientList(() => setPatientSheetOpen(false))}
+          </section>
+        </div>
+      ) : null}
 
       <Modal
         open={caseModal.open}
