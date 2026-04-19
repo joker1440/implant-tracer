@@ -1911,7 +1911,10 @@ export default function App() {
                                 ) : null}
                               </div>
                               <span className="tag agenda-item__tooth-tag">
-                                {`牙位 ${formatCaseToothLabel(item.caseEntry)}`}
+                                <span className="agenda-item__tooth-label">牙位</span>
+                                <strong className="agenda-item__tooth-value">
+                                  {formatCaseToothLabel(item.caseEntry)}
+                                </strong>
                               </span>
                             </div>
                             <div className="agenda-item__row">

@@ -430,7 +430,7 @@ img {
 }
 
 .stats-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .stat-card {
@@ -920,10 +920,27 @@ img {
 }
 
 .agenda-item__tooth-tag {
-  padding: 9px 16px;
-  font-size: 1rem;
-  font-weight: 700;
+  width: 104px;
+  min-width: 104px;
+  aspect-ratio: 1 / 1;
+  padding: 12px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
   color: #5d544d;
+  text-align: center;
+  border-radius: 28px;
+}
+
+.agenda-item__tooth-label {
+  font-size: 0.84rem;
+  letter-spacing: 0.08em;
+}
+
+.agenda-item__tooth-value {
+  font-size: 1.9rem;
+  line-height: 1;
+  margin: 0;
 }
 
 .overdue-text {
@@ -1964,8 +1981,14 @@ img {
   }
 
   .agenda-item__tooth-tag {
-    padding: 10px 16px;
-    font-size: 1.06rem;
+    width: 92px;
+    min-width: 92px;
+    padding: 10px;
+    border-radius: 24px;
+  }
+
+  .agenda-item__tooth-value {
+    font-size: 1.7rem;
   }
 
   .case-card__title-row {
