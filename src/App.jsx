@@ -20,12 +20,9 @@ import {
   PLAN_STATUS_LABELS,
   PROCEDURE_LABELS,
   PROCEDURE_OPTIONS,
-  SINUS_LIFT_APPROACH_OPTIONS,
-  TEMPLATE_FLOW_PREVIEWS,
-  TEMPLATE_LABELS
+  SINUS_LIFT_APPROACH_OPTIONS
 } from "./lib/constants";
 import {
-  buildPlanStepsFromTemplate,
   createEmptyCase,
   createEmptyPatient,
   createEmptyPlanStep,
@@ -190,6 +187,24 @@ function syncProcedureToothImplants(procedure, toothImplants) {
       tooth_implants: normalizedToothImplants
     }
   };
+}
+
+const NON_PROGRESS_PROCEDURE_TYPES = new Set(["consultation", "follow_up", "other"]);
+
+function compareVisitsByTimeline(left, right) {
+  return (
+    String(left.visited_on || "").localeCompare(String(right.visited_on || "")) ||
+    String(left.created_at || "").localeCompare(String(right.created_at || "")) ||
+    String(left.id || "").localeCompare(String(right.id || ""))
+  );
+}
+
+function compareVisitProceduresByTimeline(left, right) {
+  return (
+    Number(left.procedure_order || 0) - Number(right.procedure_order || 0) ||
+    String(left.created_at || "").localeCompare(String(right.created_at || "")) ||
+    String(left.id || "").localeCompare(String(right.id || ""))
+  );
 }
 
 function dedupeTimelineItemsByPatientTooth(items) {
@@ -588,6 +603,37 @@ export default function App() {
     accumulator[visit.case_id].push(procedure);
     return accumulator;
   }, {});
+  const completedProcedureTypesByCaseId = records.cases.reduce((accumulator, caseEntry) => {
+    const seenTypes = new Set();
+    const completedTypes = [];
+
+    ((visitsByCaseId[caseEntry.id] || []).slice().sort(compareVisitsByTimeline) || []).forEach((visit) => {
+      ((proceduresByVisitId[visit.id] || []).slice().sort(compareVisitProceduresByTimeline) || []).forEach(
+        (procedure) => {
+          if (
+            !procedure.procedure_type ||
+            NON_PROGRESS_PROCEDURE_TYPES.has(procedure.procedure_type) ||
+            seenTypes.has(procedure.procedure_type)
+          ) {
+            return;
+          }
+
+          seenTypes.add(procedure.procedure_type);
+          completedTypes.push(procedure.procedure_type);
+        }
+      );
+    });
+
+    accumulator[caseEntry.id] = completedTypes;
+    return accumulator;
+  }, {});
+  const nextPendingPlanStepByCaseId = records.cases.reduce((accumulator, caseEntry) => {
+    accumulator[caseEntry.id] = (planStepsByCaseId[caseEntry.id] || [])
+      .filter((step) => step.status === "pending")
+      .slice()
+      .sort(comparePlanStepsByTimeline)[0] || null;
+    return accumulator;
+  }, {});
 
   const deferredPatientQueryText = deferredPatientQuery.trim().toLowerCase();
   const filteredPatients = records.patients.filter((patient) => {
@@ -970,17 +1016,31 @@ export default function App() {
   const searchResults = records.cases.filter((entry) => {
     const patient = patientsById[entry.patient_id];
     const caseProcedures = proceduresByCaseId[entry.id] || [];
+    const casePlanSteps = planStepsByCaseId[entry.id] || [];
+    const completedProcedureTypes = completedProcedureTypesByCaseId[entry.id] || [];
 
     const matchesKeyword =
       !searchText ||
       patient?.full_name?.toLowerCase().includes(searchText) ||
       String(caseDisplayNoById[entry.id] || "").includes(searchText) ||
       getCaseToothCodes(entry).some((code) => code.toLowerCase().includes(searchText)) ||
-      procedureMatchesSearch(caseProcedures, searchText);
+      procedureMatchesSearch(caseProcedures, searchText) ||
+      completedProcedureTypes.some((procedureType) =>
+        (PROCEDURE_LABELS[procedureType] || procedureType).toLowerCase().includes(searchText)
+      ) ||
+      casePlanSteps.some((step) => {
+        const label = getPlanStepLabel(step);
+        return (
+          label.toLowerCase().includes(searchText) ||
+          (step.note || "").toLowerCase().includes(searchText)
+        );
+      });
 
     const matchesProcedure =
       !procedureFilter ||
-      caseProcedures.some((procedure) => procedure.procedure_type === procedureFilter);
+      completedProcedureTypes.includes(procedureFilter) ||
+      caseProcedures.some((procedure) => procedure.procedure_type === procedureFilter) ||
+      casePlanSteps.some((step) => step.procedure_type === procedureFilter);
 
     return matchesKeyword && matchesProcedure;
   });
@@ -1211,7 +1271,8 @@ export default function App() {
             patient_id: caseEntry.patient_id,
             tooth_codes: toothCodes,
             status: caseEntry.status || "active",
-            template_key: caseEntry.template_key || "arp_to_implant",
+            template_key: caseEntry.template_key || "",
+            initial_procedure_type: "",
             title: caseEntry.title || "",
             started_on: caseEntry.started_on || "",
             target_restoration_on: caseEntry.target_restoration_on || "",
@@ -1560,13 +1621,19 @@ export default function App() {
         return;
       }
 
+      if (caseModal.mode === "create" && !caseModal.values.initial_procedure_type) {
+        setBusyLabel("");
+        setErrorMessage("請選擇第一次治療內容。");
+        return;
+      }
+
       const payload = {
         owner_user_id: session.user.id,
         patient_id: caseModal.values.patient_id,
         tooth_code: toothCodes[0],
         tooth_codes: toothCodes,
         status: caseModal.values.status,
-        template_key: caseModal.values.template_key || null,
+        template_key: caseModal.mode === "create" ? null : caseModal.values.template_key || null,
         title: normalizeText(caseModal.values.title),
         started_on: caseModal.values.started_on || null,
         target_restoration_on: caseModal.values.target_restoration_on || null,
@@ -1585,25 +1652,22 @@ export default function App() {
           throw error;
         }
 
-        if (caseModal.values.template_key) {
-          const planSteps = buildPlanStepsFromTemplate(
-            caseModal.values.template_key,
-            records.templateSteps,
-            caseModal.values.started_on || null
-          ).map((step) => ({
-            owner_user_id: session.user.id,
-            case_id: data.id,
-            ...step
-          }));
+        const initialPlanStep = {
+          owner_user_id: session.user.id,
+          case_id: data.id,
+          step_order: 1,
+          title:
+            PROCEDURE_LABELS[caseModal.values.initial_procedure_type] ||
+            caseModal.values.initial_procedure_type,
+          procedure_type: caseModal.values.initial_procedure_type,
+          planned_date: caseModal.values.started_on || null,
+          status: "pending",
+          note: ""
+        };
 
-          if (planSteps.length) {
-            const { error: planError } = await supabase
-              .from("case_plan_steps")
-              .insert(planSteps);
-            if (planError) {
-              throw planError;
-            }
-          }
+        const { error: planError } = await supabase.from("case_plan_steps").insert(initialPlanStep);
+        if (planError) {
+          throw planError;
         }
 
         setSelectedPatientId(data.patient_id);
@@ -2560,35 +2624,17 @@ export default function App() {
 
                     <div className="case-grid">
                       {selectedPatientCases.map((entry) => {
-                        const caseSteps = (planStepsByCaseId[entry.id] || [])
-                          .slice()
-                          .sort(comparePlanStepsByTimeline);
-                        const nextStep = caseSteps
-                          .filter((step) => step.status === "pending")
-                          .sort(comparePlanStepsByTimeline)[0];
-                        const completedStepCount = caseSteps.filter(
-                          (step) => step.status === "completed"
-                        ).length;
-                        const firstPendingStepId =
-                          caseSteps.find((step) => step.status === "pending")?.id || "";
-                        const flowSteps = caseSteps.length
-                          ? caseSteps.slice(0, 6).map((step) => ({
-                              id: step.id,
-                              label: getPlanStepLabel(step),
-                              status: step.status,
-                              isCurrent: step.id === firstPendingStepId
-                            }))
-                          : entry.template_key
-                            ? TEMPLATE_FLOW_PREVIEWS[entry.template_key]
-                                .split(" -> ")
-                                .slice(0, 6)
-                                .map((label) => ({
-                                  id: label,
-                                  label,
-                                  status: "pending",
-                                  isCurrent: false
-                                }))
-                            : [];
+                        const caseSteps = (planStepsByCaseId[entry.id] || []).slice().sort(comparePlanStepsByTimeline);
+                        const nextStep = nextPendingPlanStepByCaseId[entry.id];
+                        const completedProcedureTypes = completedProcedureTypesByCaseId[entry.id] || [];
+                        const earliestKnownStep = caseSteps[0] || null;
+                        const caseDisplayTitle =
+                          entry.title ||
+                          getPlanStepLabel(earliestKnownStep) ||
+                          (completedProcedureTypes[0]
+                            ? PROCEDURE_LABELS[completedProcedureTypes[0]]
+                            : "") ||
+                          "Implant Case";
 
                         return (
                           <button
@@ -2609,36 +2655,31 @@ export default function App() {
                               </span>
                             </div>
                             <div className="case-card__title-row">
-                              <strong>{entry.title || TEMPLATE_LABELS[entry.template_key] || "Implant Case"}</strong>
-                              {caseSteps.length ? (
-                                <span className="case-card__progress-text">
-                                  已完成 {completedStepCount}/{caseSteps.length} 步
-                                </span>
-                              ) : null}
+                              <strong>{caseDisplayTitle}</strong>
                             </div>
-                            {flowSteps.length ? (
-                              <div className="case-card__flow" aria-label="治療流程進度">
-                                {flowSteps.map((step) => (
-                                  <span
-                                    className={cx(
-                                      "case-card__flow-pill",
-                                      step.status === "completed" &&
-                                        "case-card__flow-pill--completed",
-                                      step.isCurrent && "case-card__flow-pill--current"
-                                    )}
-                                    key={step.id}
-                                  >
-                                    {step.label}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : null}
-                            <div className="case-card__next-row">
-                              <span className="case-card__next-label">下次</span>
+                            <div className="case-card__section">
+                              <span className="case-card__section-label">已完成</span>
+                              {completedProcedureTypes.length ? (
+                                <div className="case-card__completed-row chip-row" aria-label="已完成治療內容">
+                                  {completedProcedureTypes.map((procedureType) => (
+                                    <span
+                                      className={cx("pill", getProcedureToneClass(procedureType))}
+                                      key={`${entry.id}-${procedureType}`}
+                                    >
+                                      {PROCEDURE_LABELS[procedureType]}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="muted-text">尚未完成主要治療</span>
+                              )}
+                            </div>
+                            <div className="case-card__section case-card__section--next">
+                              <span className="case-card__section-label">下一步</span>
                               {nextStep ? (
-                                <>
+                                <div className="case-card__next-row">
                                   <span className="case-card__next-date">
-                                    {formatDate(nextStep.planned_date)}
+                                    {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"}
                                   </span>
                                   <span
                                     className={cx(
@@ -2648,9 +2689,9 @@ export default function App() {
                                   >
                                     {getPlanStepLabel(nextStep)}
                                   </span>
-                                </>
+                                </div>
                               ) : (
-                                <span className="muted-text">尚未設定回診</span>
+                                <span className="muted-text">尚未安排下次回診</span>
                               )}
                             </div>
                           </button>
@@ -3111,16 +3152,8 @@ export default function App() {
               <div className="search-results">
                 {searchResults.map((entry) => {
                   const patient = patientsById[entry.patient_id];
-                  const procedures = proceduresByCaseId[entry.id] || [];
-                  const visibleProcedures = procedures.slice(0, 2);
-                  const extraProcedureCount = Math.max(procedures.length - visibleProcedures.length, 0);
-                  const nextStep = (planStepsByCaseId[entry.id] || [])
-                    .filter((step) => step.status === "pending")
-                    .sort((left, right) => {
-                      if (!left.planned_date) return 1;
-                      if (!right.planned_date) return -1;
-                      return left.planned_date.localeCompare(right.planned_date);
-                    })[0];
+                  const nextStep = nextPendingPlanStepByCaseId[entry.id];
+                  const completedProcedureTypes = completedProcedureTypesByCaseId[entry.id] || [];
 
                   return (
                     <button
@@ -3149,22 +3182,29 @@ export default function App() {
                         <span>{CASE_STATUS_LABELS[entry.status]}</span>
                         {nextStep ? (
                           <span>
-                            下次 {formatDate(nextStep.planned_date)} / {getPlanStepLabel(nextStep)}
+                            下次 {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"} /{" "}
+                            {getPlanStepLabel(nextStep)}
                           </span>
-                        ) : null}
+                        ) : (
+                          <span>尚未安排下次回診</span>
+                        )}
                       </div>
-                      <div className="chip-row search-card__procedure-row">
-                        {visibleProcedures.map((procedure) => (
-                          <span
-                            className={cx("pill", getProcedureToneClass(procedure.procedure_type))}
-                            key={procedure.id}
-                          >
-                            {PROCEDURE_LABELS[procedure.procedure_type]}
-                          </span>
-                        ))}
-                        {extraProcedureCount ? (
-                          <span className="tag">+{extraProcedureCount}</span>
-                        ) : null}
+                      <div className="search-card__section">
+                        <span className="case-card__section-label">已完成</span>
+                        {completedProcedureTypes.length ? (
+                          <div className="chip-row search-card__procedure-row">
+                            {completedProcedureTypes.map((procedureType) => (
+                              <span
+                                className={cx("pill", getProcedureToneClass(procedureType))}
+                                key={`${entry.id}-${procedureType}`}
+                              >
+                                {PROCEDURE_LABELS[procedureType]}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="muted-text">尚未完成主要治療</span>
+                        )}
                       </div>
                     </button>
                   );
@@ -3539,7 +3579,7 @@ export default function App() {
         title={caseModal.mode === "create" ? "新增 Case" : "編輯 Case"}
         subtitle={
           caseModal.mode === "create"
-            ? "先選牙位（可複選），再選擇是否套用治療流程模板。"
+            ? "先選牙位，再設定第一次治療日期與內容。"
             : "編輯 case 基本資料與牙位。"
         }
         onClose={closeCaseModal}
@@ -3567,49 +3607,18 @@ export default function App() {
               </div>
 
               <div className="field field--full">
-                <div className="section-title-row section-title-row--stack">
-                  <span>治療流程模板（選填）</span>
-                  <button
-                    className={cx(
-                      "ghost-button",
-                      !caseModal.values.template_key && "is-active-soft"
-                    )}
-                    type="button"
-                    onClick={() =>
-                      setCaseModal((current) => ({
-                        ...current,
-                        values: { ...current.values, template_key: "" }
-                      }))
-                    }
-                  >
-                    不套模板
-                  </button>
-                </div>
-                <div className="template-card-list">
-                  {records.templates.map((template) => (
-                    <button
-                      key={template.key}
-                      className={cx(
-                        "template-card",
-                        caseModal.values.template_key === template.key && "is-selected"
-                      )}
-                      type="button"
-                      onClick={() =>
-                        setCaseModal((current) => ({
-                          ...current,
-                          values: {
-                            ...current.values,
-                            template_key: template.key,
-                            title: current.values.title || template.label
-                          }
-                        }))
-                      }
-                    >
-                      <strong>{template.label}</strong>
-                      <span>{TEMPLATE_FLOW_PREVIEWS[template.key] || template.description}</span>
-                    </button>
-                  ))}
-                </div>
+                <span>第一次治療內容</span>
+                <PillSelect
+                  value={caseModal.values.initial_procedure_type}
+                  options={PROCEDURE_OPTIONS}
+                  onChange={(nextValue) =>
+                    setCaseModal((current) => ({
+                      ...current,
+                      values: { ...current.values, initial_procedure_type: nextValue }
+                    }))
+                  }
+                  getToneClass={getProcedureToneClass}
+                />
               </div>
 
               <label className="field">
@@ -3749,7 +3758,11 @@ export default function App() {
             <button
               className="primary-button"
               type="submit"
-              disabled={!caseModal.values.tooth_codes?.length || !caseModal.values.patient_id}
+              disabled={
+                !caseModal.values.tooth_codes?.length ||
+                !caseModal.values.patient_id ||
+                (caseModal.mode === "create" && !caseModal.values.initial_procedure_type)
+              }
             >
               儲存 Case
             </button>
