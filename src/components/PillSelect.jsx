@@ -7,8 +7,11 @@ export default function PillSelect({
   getToneClass,
   className = "",
   onDeleteOption,
-  isOptionDeletable
+  isOptionDeletable,
+  multiple = false
 }) {
+  const selectedValues = Array.isArray(value) ? value : [value];
+
   return (
     <div className={cx("pill-select", className)}>
       {options.map((option) => (
@@ -19,18 +22,28 @@ export default function PillSelect({
           )}
           key={option.value || "__empty__"}
         >
-          <button
-            className={cx(
-              "pill-option",
-              onDeleteOption && isOptionDeletable?.(option.value) && "pill-option--deletable",
-              getToneClass?.(option.value),
-              value === option.value && "is-active"
-            )}
-            type="button"
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
+            <button
+              className={cx(
+                "pill-option",
+                onDeleteOption && isOptionDeletable?.(option.value) && "pill-option--deletable",
+                getToneClass?.(option.value),
+                selectedValues.includes(option.value) && "is-active"
+              )}
+              type="button"
+              onClick={() => {
+                if (!multiple) {
+                  onChange(option.value);
+                  return;
+                }
+
+                const nextValues = selectedValues.includes(option.value)
+                  ? selectedValues.filter((selectedValue) => selectedValue !== option.value)
+                  : [...selectedValues, option.value];
+                onChange(nextValues);
+              }}
+            >
+              {option.label}
+            </button>
           {onDeleteOption && isOptionDeletable?.(option.value) ? (
             <button
               className="pill-option__delete"

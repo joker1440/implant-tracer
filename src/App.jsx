@@ -190,6 +190,32 @@ function syncProcedureToothImplants(procedure, toothImplants) {
 }
 
 const NON_PROGRESS_PROCEDURE_TYPES = new Set(["consultation", "follow_up", "other"]);
+const PROCEDURE_OPTION_ORDER = new Map(
+  PROCEDURE_OPTIONS.map((option, index) => [option.value, index])
+);
+
+function isImplantProcedureType(procedureType) {
+  return procedureType === "implant_placement" || procedureType === "iip";
+}
+
+function normalizeProcedureTypeSelection(values) {
+  const list = (Array.isArray(values) ? values : [values])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(list)).sort((left, right) => {
+    const leftOrder = PROCEDURE_OPTION_ORDER.get(left);
+    const rightOrder = PROCEDURE_OPTION_ORDER.get(right);
+
+    if (leftOrder === undefined && rightOrder === undefined) {
+      return left.localeCompare(right);
+    }
+
+    if (leftOrder === undefined) return 1;
+    if (rightOrder === undefined) return -1;
+    return leftOrder - rightOrder;
+  });
+}
 
 function compareVisitsByTimeline(left, right) {
   return (
@@ -221,6 +247,27 @@ function dedupeTimelineItemsByPatientTooth(items) {
     seenKeys.add(caseKey);
     return true;
   });
+}
+
+function getPendingPlanSummary(planSteps) {
+  const pendingSteps = (planSteps || [])
+    .filter((step) => step.status === "pending")
+    .slice()
+    .sort(comparePlanStepsByTimeline);
+
+  if (!pendingSteps.length) {
+    return null;
+  }
+
+  const [primaryStep] = pendingSteps;
+  const primaryDate = String(primaryStep.planned_date || "");
+  const steps = pendingSteps.filter((step) => String(step.planned_date || "") === primaryDate);
+
+  return {
+    planned_date: primaryStep.planned_date || "",
+    steps,
+    primaryStep
+  };
 }
 
 function photoTitle(photo) {
@@ -627,11 +674,8 @@ export default function App() {
     accumulator[caseEntry.id] = completedTypes;
     return accumulator;
   }, {});
-  const nextPendingPlanStepByCaseId = records.cases.reduce((accumulator, caseEntry) => {
-    accumulator[caseEntry.id] = (planStepsByCaseId[caseEntry.id] || [])
-      .filter((step) => step.status === "pending")
-      .slice()
-      .sort(comparePlanStepsByTimeline)[0] || null;
+  const nextPendingPlanSummaryByCaseId = records.cases.reduce((accumulator, caseEntry) => {
+    accumulator[caseEntry.id] = getPendingPlanSummary(planStepsByCaseId[caseEntry.id] || []);
     return accumulator;
   }, {});
 
@@ -676,7 +720,7 @@ export default function App() {
     selectedCaseVisits
       .flatMap((visit) =>
         (proceduresByVisitId[visit.id] || [])
-          .filter((procedure) => procedure.procedure_type === "implant_placement")
+          .filter((procedure) => isImplantProcedureType(procedure.procedure_type))
           .map((procedure) => ({
             ...procedure,
             visited_on: visit.visited_on
@@ -744,6 +788,7 @@ export default function App() {
         return "pill--amber";
       case "remove_membrane":
         return "pill--sand";
+      case "iip":
       case "implant_placement":
         return "pill--green";
       case "fgg_ctg":
@@ -858,19 +903,23 @@ export default function App() {
     }))
     .filter((group) => group.photos.length > 0);
 
-  const pendingPlanSteps = records.planSteps
-    .filter((step) => step.status === "pending")
-    .map((step) => {
-      const caseEntry = casesById[step.case_id];
-      const patient = caseEntry ? patientsById[caseEntry.patient_id] : null;
+  const pendingPlanSteps = records.cases
+    .map((caseEntry) => {
+      const patient = patientsById[caseEntry.patient_id];
+      const summary = getPendingPlanSummary(planStepsByCaseId[caseEntry.id] || []);
+
+      if (!patient || !summary) {
+        return null;
+      }
+
       return {
-        ...step,
+        ...summary,
         caseEntry,
         patient,
-        diffDays: step.planned_date ? daysFromToday(step.planned_date) : null
+        diffDays: summary.planned_date ? daysFromToday(summary.planned_date) : null
       };
     })
-    .filter((entry) => entry.caseEntry && entry.patient);
+    .filter(Boolean);
 
   const overdueItems = dedupeTimelineItemsByPatientTooth(
     pendingPlanSteps
@@ -981,7 +1030,8 @@ export default function App() {
   }))];
   const healingSizeGroups = Array.from(
     HEALING_SIZE_OPTIONS.reduce((groupMap, option) => {
-      const groupLabel = option.value.includes("x") ? option.value.split("x")[0] : option.value;
+      const groupLabel =
+        option.groupLabel || (option.value.includes("x") ? option.value.split("x")[0] : option.value);
       const groupItems = groupMap.get(groupLabel) || [];
       groupItems.push(option);
       groupMap.set(groupLabel, groupItems);
@@ -1272,7 +1322,7 @@ export default function App() {
             tooth_codes: toothCodes,
             status: caseEntry.status || "active",
             template_key: caseEntry.template_key || "",
-            initial_procedure_type: "",
+            initial_procedure_types: [],
             title: caseEntry.title || "",
             started_on: caseEntry.started_on || "",
             target_restoration_on: caseEntry.target_restoration_on || "",
@@ -1621,7 +1671,11 @@ export default function App() {
         return;
       }
 
-      if (caseModal.mode === "create" && !caseModal.values.initial_procedure_type) {
+      const initialProcedureTypes = normalizeProcedureTypeSelection(
+        caseModal.values.initial_procedure_types
+      );
+
+      if (caseModal.mode === "create" && !initialProcedureTypes.length) {
         setBusyLabel("");
         setErrorMessage("請選擇第一次治療內容。");
         return;
@@ -1652,22 +1706,23 @@ export default function App() {
           throw error;
         }
 
-        const initialPlanStep = {
+        const initialPlanSteps = initialProcedureTypes.map((procedureType, index) => ({
           owner_user_id: session.user.id,
           case_id: data.id,
-          step_order: 1,
-          title:
-            PROCEDURE_LABELS[caseModal.values.initial_procedure_type] ||
-            caseModal.values.initial_procedure_type,
-          procedure_type: caseModal.values.initial_procedure_type,
+          step_order: index + 1,
+          title: PROCEDURE_LABELS[procedureType] || procedureType,
+          procedure_type: procedureType,
           planned_date: caseModal.values.started_on || null,
           status: "pending",
           note: ""
-        };
+        }));
 
-        const { error: planError } = await supabase.from("case_plan_steps").insert(initialPlanStep);
-        if (planError) {
-          throw planError;
+        for (const initialPlanStep of initialPlanSteps) {
+          const { error: planError } = await supabase.from("case_plan_steps").insert(initialPlanStep);
+          if (planError) {
+            await supabase.from("cases").delete().eq("id", data.id);
+            throw planError;
+          }
         }
 
         setSelectedPatientId(data.patient_id);
@@ -1728,31 +1783,34 @@ export default function App() {
       setBusyLabel(planModal.mode === "create" ? "新增計畫中" : "更新計畫中");
       setErrorMessage("");
 
+      const existingStep =
+        planModal.mode === "edit"
+          ? records.planSteps.find((step) => step.id === planModal.stepId) || null
+          : null;
       const currentCaseSteps = (planStepsByCaseId[planModal.values.case_id] || []).filter(
         (step) => step.id !== planModal.stepId
       );
-      const provisionalStep = {
-        ...(planModal.mode === "edit"
-          ? currentCaseSteps.find((step) => step.id === planModal.stepId)
-          : null),
-        id: planModal.stepId || `draft-${Date.now()}`,
-        planned_date: planModal.values.planned_date || null,
-        step_order: 0
-      };
 
-      const payload = {
+      const payloadBase = {
         owner_user_id: session.user.id,
         case_id: planModal.values.case_id,
-        step_order:
-          planModal.mode === "edit"
-            ? provisionalStep.step_order || getNextPlanStepOrder(currentCaseSteps)
-            : getNextPlanStepOrder(currentCaseSteps),
         title: PROCEDURE_LABELS[planModal.values.procedure_type] || planModal.values.procedure_type,
         procedure_type: planModal.values.procedure_type,
         planned_date: planModal.values.planned_date || null,
         status: planModal.values.status || "pending",
         note: normalizeText(planModal.values.note)
       };
+
+      const payload =
+        planModal.mode === "create"
+          ? {
+              ...payloadBase,
+              step_order: getNextPlanStepOrder(currentCaseSteps)
+            }
+          : {
+              ...payloadBase,
+              step_order: existingStep?.step_order || getNextPlanStepOrder(currentCaseSteps)
+            };
 
       const request =
         planModal.mode === "create"
@@ -1973,7 +2031,7 @@ export default function App() {
         .filter((procedure) => procedure.procedure_type)
         .map((procedure, index) => {
           const toothImplants =
-            procedure.procedure_type === "implant_placement"
+            isImplantProcedureType(procedure.procedure_type)
               ? deriveToothImplants(procedure, visitCaseToothCodes).map((item) => ({
                   tooth_code: item.tooth_code,
                   implant_brand: normalizeText(item.implant_brand),
@@ -2025,7 +2083,7 @@ export default function App() {
               healing_size:
                 primaryToothImplant?.healing_size ||
                 normalizeHealingSize(procedure.extra_data?.healing_size),
-              ...(procedure.procedure_type === "implant_placement"
+              ...(isImplantProcedureType(procedure.procedure_type)
                 ? { tooth_implants: toothImplants }
                 : {})
             }
@@ -2083,10 +2141,9 @@ export default function App() {
                 step.id !== explicitNextStep?.id
             ) || null;
           const targetNextStep = explicitNextStep || matchedPendingStep;
-          const nextPlanPayload = {
+          const nextPlanPayloadBase = {
             owner_user_id: session.user.id,
             case_id: visitDraft.case_id,
-            step_order: targetNextStep?.step_order || getNextPlanStepOrder(caseSteps),
             title:
               PROCEDURE_LABELS[visitDraft.next_plan_procedure_type] ||
               visitDraft.next_plan_procedure_type,
@@ -2099,11 +2156,21 @@ export default function App() {
           const nextPlanRequest = targetNextStep
             ? supabase
                 .from("case_plan_steps")
-                .update(nextPlanPayload)
+                .update({
+                  ...nextPlanPayloadBase,
+                  step_order: targetNextStep.step_order
+                })
                 .eq("id", targetNextStep.id)
                 .select()
                 .single()
-            : supabase.from("case_plan_steps").insert(nextPlanPayload).select().single();
+            : supabase
+                .from("case_plan_steps")
+                .insert({
+                  ...nextPlanPayloadBase,
+                  step_order: getNextPlanStepOrder(caseSteps)
+                })
+                .select()
+                .single();
 
           const { data: savedNextStep, error: nextPlanError } = await nextPlanRequest;
           if (nextPlanError) {
@@ -2410,7 +2477,7 @@ export default function App() {
 
                       return (
                         <button
-                          key={item.id}
+                          key={`${item.caseEntry.id}-${item.planned_date || "undated"}`}
                           className="agenda-item agenda-item--upcoming"
                           type="button"
                           onClick={() => {
@@ -2432,9 +2499,16 @@ export default function App() {
                                 ) : null}
                               </div>
                               <div className="agenda-item__procedure">
-                                <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                                  {getPlanStepLabel(item)}
-                                </span>
+                                <div className="chip-row">
+                                  {item.steps.map((step) => (
+                                    <span
+                                      className={cx("pill", getProcedureToneClass(step.procedure_type))}
+                                      key={step.id || `${item.caseEntry.id}-${step.procedure_type}`}
+                                    >
+                                      {getPlanStepLabel(step)}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -2466,7 +2540,7 @@ export default function App() {
                       const monthDay = formatShortMonthDay(item.planned_date);
                       return (
                         <button
-                          key={item.id}
+                          key={`${item.caseEntry.id}-${item.planned_date || "undated"}`}
                           className="agenda-item"
                           type="button"
                           onClick={() => {
@@ -2488,9 +2562,16 @@ export default function App() {
                                 ) : null}
                               </div>
                               <div className="agenda-item__procedure">
-                                <span className={cx("pill", getProcedureToneClass(item.procedure_type))}>
-                                  {getPlanStepLabel(item)}
-                                </span>
+                                <div className="chip-row">
+                                  {item.steps.map((step) => (
+                                    <span
+                                      className={cx("pill", getProcedureToneClass(step.procedure_type))}
+                                      key={step.id || `${item.caseEntry.id}-${step.procedure_type}`}
+                                    >
+                                      {getPlanStepLabel(step)}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -2633,7 +2714,7 @@ export default function App() {
                     <div className="case-grid">
                       {selectedPatientCases.map((entry) => {
                         const caseSteps = (planStepsByCaseId[entry.id] || []).slice().sort(comparePlanStepsByTimeline);
-                        const nextStep = nextPendingPlanStepByCaseId[entry.id];
+                        const nextStep = nextPendingPlanSummaryByCaseId[entry.id];
                         const completedProcedureTypes = completedProcedureTypesByCaseId[entry.id] || [];
                         const earliestKnownStep = caseSteps[0] || null;
                         const caseDisplayTitle =
@@ -2689,14 +2770,16 @@ export default function App() {
                                   <span className="case-card__next-date">
                                     {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"}
                                   </span>
-                                  <span
-                                    className={cx(
-                                      "pill",
-                                      getProcedureToneClass(nextStep.procedure_type)
-                                    )}
-                                  >
-                                    {getPlanStepLabel(nextStep)}
-                                  </span>
+                                  <div className="chip-row case-card__completed-row">
+                                    {nextStep.steps.map((step) => (
+                                      <span
+                                        className={cx("pill", getProcedureToneClass(step.procedure_type))}
+                                        key={step.id || `${entry.id}-${step.procedure_type}`}
+                                      >
+                                        {getPlanStepLabel(step)}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
                               ) : (
                                 <span className="muted-text">尚未安排下次回診</span>
@@ -3160,7 +3243,7 @@ export default function App() {
               <div className="search-results">
                 {searchResults.map((entry) => {
                   const patient = patientsById[entry.patient_id];
-                  const nextStep = nextPendingPlanStepByCaseId[entry.id];
+                  const nextStep = nextPendingPlanSummaryByCaseId[entry.id];
                   const completedProcedureTypes = completedProcedureTypesByCaseId[entry.id] || [];
 
                   return (
@@ -3191,7 +3274,7 @@ export default function App() {
                         {nextStep ? (
                           <span>
                             下次 {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"} /{" "}
-                            {getPlanStepLabel(nextStep)}
+                            {nextStep.steps.map((step) => getPlanStepLabel(step)).join(" / ")}
                           </span>
                         ) : (
                           <span>尚未安排下次回診</span>
@@ -3615,17 +3698,21 @@ export default function App() {
               </div>
 
               <div className="field field--full">
-                <span>第一次治療內容</span>
+                <span>第一次治療內容（可複選）</span>
                 <PillSelect
-                  value={caseModal.values.initial_procedure_type}
+                  value={caseModal.values.initial_procedure_types}
                   options={PROCEDURE_OPTIONS}
                   onChange={(nextValue) =>
                     setCaseModal((current) => ({
                       ...current,
-                      values: { ...current.values, initial_procedure_type: nextValue }
+                      values: {
+                        ...current.values,
+                        initial_procedure_types: normalizeProcedureTypeSelection(nextValue)
+                      }
                     }))
                   }
                   getToneClass={getProcedureToneClass}
+                  multiple
                 />
               </div>
 
@@ -3767,9 +3854,10 @@ export default function App() {
               className="primary-button"
               type="submit"
               disabled={
+                Boolean(busyLabel) ||
                 !caseModal.values.tooth_codes?.length ||
                 !caseModal.values.patient_id ||
-                (caseModal.mode === "create" && !caseModal.values.initial_procedure_type)
+                (caseModal.mode === "create" && !caseModal.values.initial_procedure_types?.length)
               }
             >
               儲存 Case
@@ -4061,7 +4149,7 @@ export default function App() {
                     </label>
                   </div>
 
-                  {procedure.procedure_type === "implant_placement" ? (
+                  {isImplantProcedureType(procedure.procedure_type) ? (
                     <div className="implant-configurator">
                       {toothImplants.length ? (
                         <div className="implant-tooth-grid field--full">

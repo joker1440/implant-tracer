@@ -74,7 +74,7 @@ export function createEmptyCase(patientId = "") {
     tooth_codes: [],
     status: "active",
     template_key: "",
-    initial_procedure_type: "",
+    initial_procedure_types: [],
     title: "",
     started_on: "",
     target_restoration_on: "",

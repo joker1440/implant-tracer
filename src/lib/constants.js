@@ -34,6 +34,7 @@ export const PROCEDURE_OPTIONS = [
   { value: "gbr", label: "GBR" },
   { value: "sinus_lift", label: "Sinus Lift" },
   { value: "remove_membrane", label: "移除再生膜" },
+  { value: "iip", label: "IIP" },
   { value: "implant_placement", label: "植牙" },
   { value: "fgg_ctg", label: "FGG / CTG" },
   { value: "stage_2_healing_abutment", label: "接healing" },
@@ -128,6 +129,8 @@ export const HEALING_SIZE_OPTIONS = [
   { value: "4.8x2", label: "4.8x2" },
   { value: "4.8x3.5", label: "4.8x3.5" },
   { value: "4.8x5", label: "4.8x5" },
+  { value: "5x2", label: "5x2" },
+  { value: "5x4", label: "5x4" },
   { value: "5.5x2", label: "5.5x2" },
   { value: "5.5x4", label: "5.5x4" },
   { value: "5.5x5", label: "5.5x5" },
@@ -135,7 +138,8 @@ export const HEALING_SIZE_OPTIONS = [
   { value: "6x2", label: "6x2" },
   { value: "6x4", label: "6x4" },
   { value: "6x6", label: "6x6" },
-  { value: "7x7", label: "7x7" }
+  { value: "7x7", label: "7x7" },
+  { value: "custom_abutment", label: "客製化 abutment", groupLabel: "客製化" }
 ];
 
 export const TEMPLATE_LABELS = {
