@@ -932,6 +932,15 @@ export default function App() {
       .filter((entry) => entry.diffDays !== null && entry.diffDays >= 0)
       .sort((left, right) => left.diffDays - right.diffDays)
   );
+  const unscheduledCases = records.cases
+    .filter((caseEntry) => !["completed", "cancelled"].includes(caseEntry.status))
+    .map((caseEntry) => ({
+      caseEntry,
+      patient: patientsById[caseEntry.patient_id],
+      nextStep: nextPendingPlanSummaryByCaseId[caseEntry.id]
+    }))
+    .filter((entry) => entry.patient)
+    .filter((entry) => !entry.nextStep || !String(entry.nextStep.planned_date || "").trim());
 
   const stats = {
     totalCases: records.cases.length,
@@ -2447,27 +2456,12 @@ export default function App() {
       <main className="page">
         {activeView === "dashboard" ? (
           <section className="view-stack">
-            <section className="stats-grid">
-              <article className="stat-card">
-                <span className="stat-value">{stats.totalCases}</span>
-                <span className="stat-label">總 Cases</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-value">{stats.activeCases}</span>
-                <span className="stat-label">進行中</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-value">{stats.totalPatients}</span>
-                <span className="stat-label">病患數</span>
-              </article>
-            </section>
-
-            <section className="dual-columns">
+            <section className="dashboard-grid">
               <section className="panel">
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">Upcoming</p>
-                    <h3>即將回診</h3>
+                    <h3>即將回診 ({upcomingItems.length})</h3>
                   </div>
                 </div>
                 {upcomingItems.length ? (
@@ -2524,6 +2518,70 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="empty-state">目前沒有待回診病患。</div>
+                )}
+              </section>
+
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Unscheduled</p>
+                    <h3>尚未安排回診 ({unscheduledCases.length})</h3>
+                  </div>
+                </div>
+                {unscheduledCases.length ? (
+                  <div className="agenda-list">
+                    {unscheduledCases.map((item) => (
+                      <button
+                        key={`${item.caseEntry.id}-unscheduled`}
+                        className="agenda-item agenda-item--upcoming"
+                        type="button"
+                        onClick={() => {
+                          setActiveView("patients");
+                          setSelectedPatientId(item.patient.id);
+                          setSelectedCaseId(item.caseEntry.id);
+                        }}
+                      >
+                        <div className="calendar-chip calendar-chip--soft">
+                          <span className="calendar-chip__year">待</span>
+                          <strong className="calendar-chip__value">安排</strong>
+                        </div>
+                        <div className="agenda-item__body">
+                          <div className="agenda-item__row">
+                            <div className="agenda-item__person">
+                              <strong>{item.patient.full_name}</strong>
+                              {item.patient.clinic_name ? (
+                                <span className="muted-text">{item.patient.clinic_name}</span>
+                              ) : null}
+                            </div>
+                            <div className="agenda-item__procedure">
+                              <div className="chip-row">
+                                {item.nextStep?.steps?.length ? (
+                                  item.nextStep.steps.map((step) => (
+                                    <span
+                                      className={cx("pill", getProcedureToneClass(step.procedure_type))}
+                                      key={step.id || `${item.caseEntry.id}-${step.procedure_type}`}
+                                    >
+                                      {getPlanStepLabel(step)}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="muted-text">尚未指定下一步</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <span className="tag agenda-item__tooth-tag">
+                          <span className="agenda-item__tooth-label">牙位</span>
+                          <strong className="agenda-item__tooth-value">
+                            {formatCaseToothLabel(item.caseEntry)}
+                          </strong>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">目前沒有尚未安排回診的個案。</div>
                 )}
               </section>
 

@@ -436,6 +436,7 @@ img {
 }
 
 .stats-grid,
+.dashboard-grid,
 .dual-columns,
 .detail-grid,
 .toolbar-grid,
@@ -446,6 +447,10 @@ img {
 }
 
 .stats-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -2285,6 +2290,7 @@ img {
   }
 
   .patients-layout,
+  .dashboard-grid,
   .dual-columns,
   .stats-grid,
   .detail-grid,
