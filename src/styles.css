@@ -1505,6 +1505,14 @@ img {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
+.compare-view--count-2 .compare-view__multi-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compare-view--count-3 .compare-view__multi-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .compare-view__panel {
   display: grid;
   gap: 6px;
@@ -1534,6 +1542,22 @@ img {
   height: 180px;
   object-fit: contain;
   background: #fff;
+}
+
+.compare-view--count-2 .compare-view__image-frame {
+  min-height: 320px;
+}
+
+.compare-view--count-2 .compare-view__image {
+  height: 320px;
+}
+
+.compare-view--count-3 .compare-view__image-frame {
+  min-height: 240px;
+}
+
+.compare-view--count-3 .compare-view__image {
+  height: 240px;
 }
 
 .photo-placeholder,
@@ -2112,6 +2136,10 @@ img {
 
 .modal-card--xwide {
   width: min(1180px, 100%);
+}
+
+.modal-card--xxwide {
+  width: min(1360px, 100%);
 }
 
 .modal-header {

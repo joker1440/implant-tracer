@@ -1113,6 +1113,15 @@ export default function App() {
 
       return rightDate.localeCompare(leftDate) || String(right.id).localeCompare(String(left.id));
     });
+  const comparePhotoCount = selectedComparePhotos.length;
+  const compareModalWidth =
+    comparePhotoCount <= 2 ? "xxwide" : comparePhotoCount === 3 ? "xwide" : "wide";
+  const compareViewCountClass =
+    comparePhotoCount <= 2
+      ? "compare-view--count-2"
+      : comparePhotoCount === 3
+        ? "compare-view--count-3"
+        : "compare-view--count-many";
   const previewPhoto = selectedCasePhotos.find((photo) => photo.id === photoPreview.photoId);
   const previewPhotoVisit = previewPhoto ? visitsById[previewPhoto.visit_id] : null;
   const previewPhotoProcedures = previewPhotoVisit ? proceduresByVisitId[previewPhotoVisit.id] || [] : [];
@@ -2001,11 +2010,21 @@ export default function App() {
         summary: normalizeText(visitDraft.summary),
         next_note: normalizeText(visitDraft.next_note)
       };
+      let visitId = visitModal.visitId;
       const caseEntry = casesById[visitDraft.case_id];
       const patientId = caseEntry?.patient_id || selectedPatientId;
       const visitCaseToothCodes = getCaseToothCodes(caseEntry);
-
-      let visitId = visitModal.visitId;
+      const previousVisitProcedures =
+        visitModal.mode === "edit" ? proceduresByVisitId[visitId] || [] : [];
+      const otherCaseVisitIds = new Set(
+        records.visits
+          .filter((visit) => visit.case_id === visitDraft.case_id && visit.id !== visitId)
+          .map((visit) => visit.id)
+      );
+      const otherCaseHasDelivery = records.visitProcedures.some(
+        (procedure) =>
+          otherCaseVisitIds.has(procedure.visit_id) && procedure.procedure_type === "delivery"
+      );
 
       if (visitModal.mode === "create") {
         const { data, error } = await supabase
@@ -2108,6 +2127,38 @@ export default function App() {
         }
       }
 
+      const hasDeliveryNow = normalizedProcedures.some(
+        (procedure) => procedure.procedure_type === "delivery"
+      );
+      const hadDeliveryBefore = previousVisitProcedures.some(
+        (procedure) => procedure.procedure_type === "delivery"
+      );
+
+      if (hasDeliveryNow && caseEntry?.status !== "completed") {
+        const { error: completeCaseError } = await supabase
+          .from("cases")
+          .update({ status: "completed" })
+          .eq("id", visitDraft.case_id);
+        if (completeCaseError) {
+          throw completeCaseError;
+        }
+      }
+
+      if (
+        !hasDeliveryNow &&
+        hadDeliveryBefore &&
+        !otherCaseHasDelivery &&
+        caseEntry?.status === "completed"
+      ) {
+        const { error: reopenCaseError } = await supabase
+          .from("cases")
+          .update({ status: "active" })
+          .eq("id", visitDraft.case_id);
+        if (reopenCaseError) {
+          throw reopenCaseError;
+        }
+      }
+
       closeVisitModal();
       await loadAppData();
 
@@ -2130,13 +2181,22 @@ export default function App() {
         }
 
         if (
+          !hasDeliveryNow &&
           visitDraft.next_plan_enabled &&
           visitDraft.next_plan_procedure_type &&
           visitDraft.next_plan_planned_date
         ) {
-          const caseSteps = (planStepsByCaseId[visitDraft.case_id] || []).filter(
-            (step) => step.id !== visitDraft.plan_step_id
-          );
+          const { data: freshCaseSteps, error: freshCaseStepsError } = await supabase
+            .from("case_plan_steps")
+            .select("*")
+            .eq("case_id", visitDraft.case_id);
+
+          if (freshCaseStepsError) {
+            throw freshCaseStepsError;
+          }
+
+          const allCaseSteps = freshCaseSteps || [];
+          const caseSteps = allCaseSteps.filter((step) => step.id !== visitDraft.plan_step_id);
           const pendingCaseSteps = caseSteps
             .filter((step) => step.status === "pending")
             .sort(comparePlanStepsByTimeline);
@@ -2176,7 +2236,7 @@ export default function App() {
                 .from("case_plan_steps")
                 .insert({
                   ...nextPlanPayloadBase,
-                  step_order: getNextPlanStepOrder(caseSteps)
+                  step_order: getNextPlanStepOrder(allCaseSteps)
                 })
                 .select()
                 .single();
@@ -2263,6 +2323,19 @@ export default function App() {
     try {
       setBusyLabel("刪除回診中");
       const visitPhotos = records.visitPhotos.filter((photo) => photo.visit_id === visit.id);
+      const deletingVisitHasDelivery = records.visitProcedures.some(
+        (procedure) => procedure.visit_id === visit.id && procedure.procedure_type === "delivery"
+      );
+      const remainingCaseVisitIds = new Set(
+        records.visits
+          .filter((entry) => entry.case_id === visit.case_id && entry.id !== visit.id)
+          .map((entry) => entry.id)
+      );
+      const remainingCaseHasDelivery = records.visitProcedures.some(
+        (procedure) =>
+          remainingCaseVisitIds.has(procedure.visit_id) && procedure.procedure_type === "delivery"
+      );
+
       await removeStorageObjects(visitPhotos);
 
       if (visit.plan_step_id) {
@@ -2282,6 +2355,19 @@ export default function App() {
       const { error } = await supabase.from("visits").delete().eq("id", visit.id);
       if (error) {
         throw error;
+      }
+
+      if (deletingVisitHasDelivery && !remainingCaseHasDelivery) {
+        const caseEntry = casesById[visit.case_id];
+        if (caseEntry?.status === "completed") {
+          const { error: reopenCaseError } = await supabase
+            .from("cases")
+            .update({ status: "active" })
+            .eq("id", visit.case_id);
+          if (reopenCaseError) {
+            throw reopenCaseError;
+          }
+        }
       }
 
       await loadAppData();
@@ -2823,7 +2909,9 @@ export default function App() {
                             </div>
                             <div className="case-card__section case-card__section--next">
                               <span className="case-card__section-label">下一步</span>
-                              {nextStep ? (
+                              {entry.status === "completed" ? (
+                                <span className="muted-text">-</span>
+                              ) : nextStep ? (
                                 <div className="case-card__next-row">
                                   <span className="case-card__next-date">
                                     {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"}
@@ -3329,7 +3417,9 @@ export default function App() {
                       </div>
                       <div className="search-card__meta">
                         <span>{CASE_STATUS_LABELS[entry.status]}</span>
-                        {nextStep ? (
+                        {entry.status === "completed" ? (
+                          <span>下次 -</span>
+                        ) : nextStep ? (
                           <span>
                             下次 {nextStep.planned_date ? formatDate(nextStep.planned_date) : "未排日期"} /{" "}
                             {nextStep.steps.map((step) => getPlanStepLabel(step)).join(" / ")}
@@ -4692,10 +4782,10 @@ export default function App() {
             open: false
           }))
         }
-        width="wide"
+        width={compareModalWidth}
       >
-        {selectedComparePhotos.length >= 2 ? (
-          <div className="compare-view">
+        {comparePhotoCount >= 2 ? (
+          <div className={cx("compare-view", compareViewCountClass)}>
             <div className="compare-view__multi-grid">
               {selectedComparePhotos.map((photo) => {
                 const visit = visitsById[photo.visit_id];
