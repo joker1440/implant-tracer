@@ -32,11 +32,11 @@
   --gold-text: #9c803f;
   --stone-soft: #f2ece5;
   --stone-text: #7a6c61;
-  --shadow: 0 22px 56px rgba(109, 86, 68, 0.1);
-  --radius-xl: 28px;
-  --radius-lg: 22px;
-  --radius-md: 16px;
-  --radius-sm: 12px;
+  --shadow: 0 16px 36px rgba(109, 86, 68, 0.08);
+  --radius-xl: 24px;
+  --radius-lg: 18px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
   font-family: "Avenir Next", "Hiragino Sans GB", "PingFang TC", "Noto Sans TC",
     sans-serif;
   color: var(--text);
@@ -82,7 +82,7 @@ img {
 }
 
 .app-shell {
-  padding: 24px;
+  padding: 18px;
 }
 
 .topbar-shell {
@@ -90,7 +90,7 @@ img {
   top: 0;
   z-index: 30;
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: 18px;
+  padding-bottom: 12px;
   background: linear-gradient(to bottom, #f7f2ec 0%, #f7f2ec 80%, rgba(247, 242, 236, 0.92) 100%);
 }
 
@@ -98,9 +98,9 @@ img {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   margin: 0;
-  padding: 18px 24px;
+  padding: 14px 18px;
   border: 1px solid var(--line);
   background: #fffdf9;
   border-radius: 999px;
@@ -191,7 +191,7 @@ img {
 }
 
 .brand-block {
-  gap: 16px;
+  gap: 12px;
 }
 
 .brand-block h1,
@@ -207,9 +207,20 @@ img {
   margin: 0;
 }
 
+.brand-block h1 {
+  font-size: 2rem;
+  line-height: 1.02;
+}
+
+.hero-panel h2,
+.panel-heading h3 {
+  font-size: 1.55rem;
+  line-height: 1.08;
+}
+
 .brand-mark {
-  width: 52px;
-  height: 52px;
+  width: 46px;
+  height: 46px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -230,7 +241,7 @@ img {
 .eyebrow {
   margin: 0 0 4px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -262,7 +273,8 @@ img {
 .secondary-button,
 .primary-button,
 .danger-button {
-  padding: 10px 16px;
+  padding: 8px 14px;
+  font-size: 0.92rem;
 }
 
 .nav-pill {
@@ -346,7 +358,7 @@ img {
 }
 
 .date-chip {
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.68);
   color: var(--muted);
@@ -360,7 +372,7 @@ img {
 
 .view-stack {
   display: grid;
-  gap: 20px;
+  gap: 16px;
 }
 
 .hero-panel,
@@ -378,14 +390,14 @@ img {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
-  padding: 28px;
+  gap: 16px;
+  padding: 20px;
   border-radius: var(--radius-xl);
 }
 
 .hero-panel__content {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .hero-panel__highlights {
@@ -430,7 +442,7 @@ img {
 .compare-grid,
 .patients-layout {
   display: grid;
-  gap: 20px;
+  gap: 16px;
 }
 
 .stats-grid {
@@ -438,7 +450,7 @@ img {
 }
 
 .stat-card {
-  padding: 24px;
+  padding: 18px;
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
@@ -462,7 +474,7 @@ img {
 }
 
 .stat-value {
-  font-size: clamp(2rem, 4vw, 3rem);
+  font-size: clamp(1.8rem, 3.2vw, 2.7rem);
   line-height: 1;
   color: var(--brand);
   font-weight: 700;
@@ -558,7 +570,7 @@ img {
 }
 
 .panel {
-  padding: 24px;
+  padding: 18px;
   border-radius: var(--radius-xl);
 }
 
@@ -567,7 +579,7 @@ img {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 14px;
 }
 
 .panel-heading--danger h3 {
@@ -579,7 +591,7 @@ img {
   top: 112px;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 14px;
+  gap: 12px;
   max-height: calc(100vh - 128px);
   min-height: 0;
 }
@@ -639,7 +651,7 @@ img {
 .visit-photo-groups,
 .template-card-list {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .patient-list {
@@ -680,12 +692,12 @@ img {
   margin: 0 auto;
   border: 1px solid var(--line);
   background: var(--panel-strong);
-  border-radius: 28px 28px 0 0;
+  border-radius: 22px 22px 0 0;
   box-shadow: var(--shadow);
-  padding: 14px 16px 18px;
+  padding: 12px 14px 16px;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
-  gap: 14px;
+  gap: 12px;
   max-height: min(82vh, 760px);
   min-height: 0;
   overflow: hidden;
@@ -733,9 +745,9 @@ img {
   text-align: left;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.78);
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 8px 18px rgba(95, 77, 64, 0.04);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 6px 14px rgba(95, 77, 64, 0.035);
 }
 
 .patient-item.is-selected,
@@ -759,12 +771,12 @@ img {
 .detail-label,
 .search-card__meta {
   color: var(--muted);
-  font-size: 0.94rem;
+  font-size: 0.88rem;
 }
 
 .agenda-item__person {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
   flex: 0 1 auto;
 }
@@ -772,30 +784,30 @@ img {
 .case-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 12px;
 }
 
 .photo-grid,
 .photo-draft-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 180px));
-  gap: 12px;
+  gap: 10px;
   justify-content: flex-start;
   align-items: start;
 }
 
 .upload-feedback {
-  padding: 10px 14px;
-  border-radius: 14px;
+  padding: 8px 12px;
+  border-radius: 12px;
   border: 1px solid rgba(143, 167, 154, 0.22);
   background: rgba(143, 167, 154, 0.08);
   color: var(--brand-deep);
-  font-size: 0.92rem;
+  font-size: 0.86rem;
 }
 
 .case-card {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .case-card__header {
@@ -812,13 +824,13 @@ img {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .case-card__tooth-tag {
-  padding: 8px 15px;
-  font-size: 0.95rem;
+  padding: 7px 13px;
+  font-size: 0.88rem;
   font-weight: 700;
   color: #5d544d;
 }
@@ -826,7 +838,7 @@ img {
 .case-card__section,
 .search-card__section {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .case-card__section--next {
@@ -835,7 +847,7 @@ img {
 
 .case-card__section-label {
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.08em;
 }
@@ -843,19 +855,19 @@ img {
 .case-card__completed-row,
 .search-card__procedure-row {
   align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
 }
 
 .case-card__next-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .case-card__next-label {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.84rem;
   font-weight: 600;
 }
 
@@ -866,8 +878,8 @@ img {
 
 .tag,
 .pill {
-  padding: 6px 12px;
-  font-size: 0.82rem;
+  padding: 5px 10px;
+  font-size: 0.76rem;
   line-height: 1;
   font-weight: 600;
 }
@@ -1014,12 +1026,12 @@ img {
 .photo-card,
 .compare-card,
 .timeline-item {
-  padding: 18px;
+  padding: 14px;
 }
 
 .visit-card,
 .timeline-item {
-  gap: 8px;
+  gap: 6px;
 }
 
 .alert-banner {
@@ -1085,7 +1097,7 @@ img {
 
 .timeline-item__main {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
 }
@@ -1094,13 +1106,13 @@ img {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 14px;
+  gap: 4px 10px;
   min-width: 0;
 }
 
 .timeline-item__date {
   color: var(--muted);
-  font-size: 0.98rem;
+  font-size: 0.9rem;
   font-weight: 500;
 }
 
@@ -1108,13 +1120,13 @@ img {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
 }
 
 .visit-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .visit-card__header,
@@ -1129,15 +1141,15 @@ img {
 .agenda-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 12px;
+  padding: 12px 14px;
 }
 
 .calendar-chip {
-  width: 96px;
-  min-width: 96px;
+  width: 82px;
+  min-width: 82px;
   aspect-ratio: 1 / 1;
-  border-radius: 26px;
+  border-radius: 22px;
   background: #f9ece9;
   color: #b06d67;
   display: flex;
@@ -1146,7 +1158,7 @@ img {
   justify-content: center;
   align-self: flex-start;
   flex-shrink: 0;
-  padding: 12px;
+  padding: 10px;
 }
 
 .calendar-chip--soft {
@@ -1155,22 +1167,22 @@ img {
 }
 
 .calendar-chip span {
-  font-size: 0.84rem;
+  font-size: 0.72rem;
   letter-spacing: 0.14em;
 }
 
 .calendar-chip__year {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   letter-spacing: 0.08em;
 }
 
 .calendar-chip strong {
-  font-size: 1.7rem;
+  font-size: 1.45rem;
   line-height: 1;
 }
 
 .calendar-chip__value {
-  font-size: 1.9rem;
+  font-size: 1.6rem;
   letter-spacing: -0.03em;
 }
 
@@ -1204,32 +1216,32 @@ img {
 .agenda-item__procedure .pill {
   display: inline-flex;
   align-items: center;
-  min-height: 44px;
+  min-height: 34px;
   width: 100%;
   max-width: none;
   justify-content: flex-start;
 }
 
 .agenda-item__tooth-tag {
-  width: 96px;
-  min-width: 96px;
+  width: 82px;
+  min-width: 82px;
   aspect-ratio: 1 / 1;
-  padding: 10px;
+  padding: 8px;
   display: grid;
   place-items: center;
   gap: 4px;
   color: #5d544d;
   text-align: center;
-  border-radius: 26px;
+  border-radius: 22px;
 }
 
 .agenda-item__tooth-label {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   letter-spacing: 0.08em;
 }
 
 .agenda-item__tooth-value {
-  font-size: 1.8rem;
+  font-size: 1.55rem;
   line-height: 1;
   margin: 0;
 }
@@ -1242,14 +1254,14 @@ img {
 .compare-card,
 .photo-card {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .visit-photo-group {
   display: grid;
-  gap: 16px;
-  padding: 18px;
-  border-radius: 22px;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.68);
 }
@@ -1270,7 +1282,7 @@ img {
 .visit-photo-group__meta,
 .compare-status {
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.86rem;
   flex-wrap: wrap;
 }
 
@@ -1281,8 +1293,8 @@ img {
 .template-card {
   width: 100%;
   text-align: center;
-  padding: 18px 20px;
-  border-radius: 20px;
+  padding: 14px 16px;
+  border-radius: 16px;
   border: 1px solid rgba(120, 100, 86, 0.18);
   background: rgba(255, 255, 255, 0.84);
   display: grid;
@@ -1291,7 +1303,7 @@ img {
 
 .template-card span {
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: 0.88rem;
 }
 
 .template-card.is-selected {
@@ -1309,7 +1321,7 @@ img {
 .photo-card,
 .compare-card,
 .photo-draft-card {
-  border-radius: 22px;
+  border-radius: 18px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.78);
@@ -1366,12 +1378,12 @@ img {
 .compare-card__body,
 .photo-draft-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .photo-card__meta {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .photo-draft-card__summary {
@@ -1380,7 +1392,7 @@ img {
 }
 
 .photo-card__body {
-  padding: 10px 10px 12px;
+  padding: 8px 8px 10px;
 }
 
 .photo-card__actions {
@@ -1394,12 +1406,12 @@ img {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  padding: 8px 12px;
+  min-height: 30px;
+  padding: 6px 10px;
   border-radius: 999px;
   background: rgba(137, 121, 110, 0.08);
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
 }
 
 .photo-selection-chip--selected {
@@ -1417,8 +1429,8 @@ img {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 0.84rem;
+  padding: 7px 10px;
+  font-size: 0.78rem;
   line-height: 1;
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
@@ -1441,17 +1453,17 @@ img {
 
 .photo-lightbox {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .photo-lightbox__frame {
-  border-radius: 22px;
+  border-radius: 18px;
   overflow: hidden;
   border: 1px solid rgba(120, 100, 86, 0.12);
   background: rgba(247, 243, 238, 0.92);
   display: grid;
   place-items: center;
-  min-height: 320px;
+  min-height: 260px;
 }
 
 .photo-lightbox__image {
@@ -1462,12 +1474,12 @@ img {
 
 .photo-lightbox__meta {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .compare-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .compare-grid--modal {
@@ -1476,12 +1488,12 @@ img {
 
 .compare-view {
   display: grid;
-  gap: 18px;
+  gap: 14px;
 }
 
 .compare-view__multi-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .compare-view__multi-grid {
@@ -1490,31 +1502,31 @@ img {
 
 .compare-view__panel {
   display: grid;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 20px;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.76);
 }
 
 .compare-view__panel-meta {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .compare-view__image-frame {
-  border-radius: 18px;
+  border-radius: 14px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.76);
   border: 1px solid rgba(120, 100, 86, 0.12);
-  min-height: 220px;
+  min-height: 180px;
   display: grid;
   place-items: center;
 }
 
 .compare-view__image {
   width: 100%;
-  height: 220px;
+  height: 180px;
   object-fit: contain;
   background: #fff;
 }
@@ -2315,19 +2327,19 @@ img {
 
 @media (max-width: 760px) {
   .app-shell {
-    padding: 16px;
+    padding: 12px;
   }
 
   .topbar-shell {
     padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: 10px;
+    padding-bottom: 8px;
   }
 
   .topbar {
     margin: 0;
-    padding: 12px 14px;
-    gap: 8px 10px;
-    border-radius: 22px;
+    padding: 10px 12px;
+    gap: 6px 8px;
+    border-radius: 18px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
@@ -2335,7 +2347,7 @@ img {
 
   .topbar__left {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
   }
 
@@ -2344,14 +2356,14 @@ img {
   }
 
   .brand-block h1 {
-    font-size: 1.55rem;
+    font-size: 1.32rem;
     line-height: 1.02;
   }
 
   .brand-mark,
   .brand-block--compact .brand-mark {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     border-radius: 12px;
   }
 
@@ -2359,7 +2371,7 @@ img {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     width: 100%;
-    gap: 6px;
+    gap: 4px;
   }
 
   .nav-pill,
@@ -2367,8 +2379,8 @@ img {
   .secondary-button,
   .primary-button,
   .danger-button {
-    padding: 8px 11px;
-    font-size: 0.9rem;
+    padding: 7px 9px;
+    font-size: 0.82rem;
   }
 
   .topbar__mobile-trigger {
@@ -2384,8 +2396,8 @@ img {
   .stat-card,
   .auth-card,
   .setup-card {
-    padding: 16px;
-    border-radius: 20px;
+    padding: 14px;
+    border-radius: 18px;
   }
 
   .implant-healing-panel {
@@ -2412,8 +2424,8 @@ img {
   }
 
   .pill-select--dense .pill-option {
-    padding: 8px 11px;
-    font-size: 0.84rem;
+    padding: 7px 10px;
+    font-size: 0.78rem;
   }
 
   .form-grid,
@@ -2438,7 +2450,7 @@ img {
   .agenda-item {
     flex-direction: row;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
   }
 
   .agenda-item__body {
@@ -2447,27 +2459,27 @@ img {
 
   .agenda-item__row {
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: nowrap;
   }
 
   .agenda-item__person strong {
-    font-size: 1.12rem;
+    font-size: 1rem;
   }
 
   .agenda-item__procedure .pill {
-    min-height: 40px;
+    min-height: 32px;
   }
 
   .agenda-item__tooth-tag {
-    width: 82px;
-    min-width: 82px;
-    padding: 8px;
-    border-radius: 22px;
+    width: 74px;
+    min-width: 74px;
+    padding: 7px;
+    border-radius: 18px;
   }
 
   .agenda-item__tooth-value {
-    font-size: 1.55rem;
+    font-size: 1.38rem;
   }
 
   .case-card__title-row {
@@ -2546,8 +2558,8 @@ img {
   }
 
   .search-card {
-    gap: 10px;
-    padding: 12px;
+    gap: 8px;
+    padding: 10px;
   }
 
   .search-card__header,
@@ -2584,7 +2596,7 @@ img {
   .panel-heading .inline-actions .ghost-button,
   .panel-heading .inline-actions .primary-button {
     white-space: nowrap;
-    padding: 9px 12px;
+    padding: 7px 10px;
   }
 
   .patient-item,
@@ -2600,13 +2612,13 @@ img {
   .timeline-item,
   .visit-photo-group,
   .photo-draft-card {
-    border-radius: 18px;
-    padding: 14px;
+    border-radius: 16px;
+    padding: 12px;
   }
 
   .patient-list {
-    margin-top: 12px;
-    gap: 12px;
+    margin-top: 14px;
+    gap: 10px;
   }
 
   .clinic-builder__row {
@@ -2614,18 +2626,18 @@ img {
   }
 
   .empty-state {
-    min-height: 108px;
-    padding: 16px;
+    min-height: 92px;
+    padding: 14px;
   }
 
   .calendar-chip {
-    width: 82px;
-    min-width: 82px;
-    border-radius: 22px;
+    width: 74px;
+    min-width: 74px;
+    border-radius: 18px;
   }
 
   .calendar-chip__value {
-    font-size: 1.55rem;
+    font-size: 1.4rem;
   }
 
   .photo-draft-card__summary .inline-actions {
@@ -2649,19 +2661,19 @@ img {
 
   .modal-card {
     max-height: calc(100dvh - 16px);
-    border-radius: 24px;
+    border-radius: 20px;
   }
 
   .modal-body {
-    padding: 18px;
+    padding: 14px;
   }
 
   .modal-header {
-    padding: 18px;
+    padding: 14px;
   }
 
   .modal-actions {
-    margin: 0 -18px -18px;
-    padding: 14px 18px 18px;
+    margin: 0 -14px -14px;
+    padding: 12px 14px 14px;
   }
 }
