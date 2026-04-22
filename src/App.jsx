@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import DateInput from "./components/DateInput";
 import Modal from "./components/Modal";
 import PillSelect from "./components/PillSelect";
@@ -85,6 +85,89 @@ function createClientId() {
   }
 
   return `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function replaceFileExtension(filename, nextExtension) {
+  const safeName = String(filename || "photo").replace(/\.[^.]+$/, "");
+  return `${safeName}.${nextExtension}`;
+}
+
+function loadImageElementFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+async function compressImageFile(
+  file,
+  { maxDimension = 1600, quality = 0.82, minCompressionBytes = 900 * 1024 } = {}
+) {
+  if (
+    !file ||
+    typeof window === "undefined" ||
+    typeof document === "undefined" ||
+    typeof File === "undefined"
+  ) {
+    return file;
+  }
+
+  const fileType = String(file.type || "").toLowerCase();
+  if (!fileType.startsWith("image/") || /gif|svg/.test(fileType)) {
+    return file;
+  }
+
+  if (file.size <= minCompressionBytes) {
+    return file;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImageElementFromUrl(objectUrl);
+    const sourceWidth = image.naturalWidth || image.width;
+    const sourceHeight = image.naturalHeight || image.height;
+
+    if (!sourceWidth || !sourceHeight) {
+      return file;
+    }
+
+    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+    const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return file;
+    }
+
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+    const outputType = fileType === "image/png" ? "image/png" : "image/jpeg";
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, outputType, outputType === "image/jpeg" ? quality : undefined);
+    });
+
+    if (!blob || blob.size >= file.size * 0.98) {
+      return file;
+    }
+
+    const extension = outputType === "image/png" ? "png" : "jpg";
+    return new File([blob], replaceFileExtension(file.name, extension), {
+      type: outputType,
+      lastModified: file.lastModified
+    });
+  } catch (_error) {
+    return file;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 function numberOrNull(value) {
@@ -198,6 +281,13 @@ function isImplantProcedureType(procedureType) {
   return procedureType === "implant_placement" || procedureType === "iip";
 }
 
+function hasHealingConfigurator(procedureType) {
+  return (
+    isImplantProcedureType(procedureType) ||
+    procedureType === "stage_2_healing_abutment"
+  );
+}
+
 function normalizeProcedureTypeSelection(values) {
   const list = (Array.isArray(values) ? values : [values])
     .map((value) => String(value || "").trim())
@@ -299,6 +389,14 @@ function revokeDraftPhotoUrls(visitDraft) {
   }
 }
 
+function getPhotoCacheKey(photo) {
+  if (!photo) {
+    return "";
+  }
+
+  return photo.id || `${photo.bucket_name || ""}:${photo.storage_path || ""}`;
+}
+
 function comparePlanStepsByTimeline(left, right) {
   if (!left.planned_date && !right.planned_date) {
     return (left.step_order || 0) - (right.step_order || 0) || String(left.id || "").localeCompare(String(right.id || ""));
@@ -344,9 +442,12 @@ export default function App() {
   const [records, setRecords] = useState(INITIAL_RECORDS);
   const [loadingData, setLoadingData] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
+  const [photoPrepLabel, setPhotoPrepLabel] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState("");
+  const [photoUrlCache, setPhotoUrlCache] = useState({});
+  const photoUrlRequestRef = useRef(new Map());
   const [activeView, setActiveView] = useState("dashboard");
   const [isTopbarCondensed, setIsTopbarCondensed] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState("");
@@ -545,18 +646,6 @@ export default function App() {
 
     setClinicCatalogFallback(clinicCatalogMissing);
 
-    const hydratedPhotos = await Promise.all(
-      (photosResult.data || []).map(async (photo) => {
-        const signedUrlResult = await supabase.storage
-          .from(photo.bucket_name)
-          .createSignedUrl(photo.storage_path, 3600);
-        return {
-          ...photo,
-          signed_url: signedUrlResult.data?.signedUrl || ""
-        };
-      })
-    );
-
     setRecords({
       patients: patientsResult.data || [],
       clinics: clinicCatalogMissing ? [] : clinicsResult.data || [],
@@ -564,7 +653,7 @@ export default function App() {
       planSteps: planStepsResult.data || [],
       visits: visitsResult.data || [],
       visitProcedures: proceduresResult.data || [],
-      visitPhotos: hydratedPhotos,
+      visitPhotos: photosResult.data || [],
       caseImplants: implantsResult.data || [],
       toothPositions: toothPositionsResult.data || [],
       templates: templatesResult.data || [],
@@ -575,6 +664,164 @@ export default function App() {
     setLoadingData(false);
   }
 
+  async function refreshCaseData(caseId) {
+    if (!supabase || !session?.user || !caseId) {
+      return;
+    }
+
+    const [
+      caseResult,
+      planStepsResult,
+      visitsResult,
+      photosResult,
+      implantsResult
+    ] = await Promise.all([
+      supabase.from("cases").select("*").eq("id", caseId).single(),
+      supabase
+        .from("case_plan_steps")
+        .select("*")
+        .eq("case_id", caseId)
+        .order("planned_date", { ascending: true, nullsFirst: false }),
+      supabase.from("visits").select("*").eq("case_id", caseId).order("visited_on", { ascending: false }),
+      supabase.from("visit_photos").select("*").eq("case_id", caseId).order("created_at", { ascending: false }),
+      supabase.from("case_implants").select("*").eq("case_id", caseId)
+    ]);
+
+    const visitIds = (visitsResult.data || []).map((visit) => visit.id);
+    const proceduresResult = visitIds.length
+      ? await supabase
+          .from("visit_procedures")
+          .select("*")
+          .in("visit_id", visitIds)
+          .order("procedure_order", { ascending: true })
+      : { data: [], error: null };
+
+    const firstError = [
+      caseResult.error,
+      planStepsResult.error,
+      visitsResult.error,
+      proceduresResult.error,
+      photosResult.error,
+      implantsResult.error
+    ].find(Boolean);
+
+    if (firstError) {
+      throw firstError;
+    }
+
+    setRecords((current) => {
+      const currentCaseVisitIds = new Set(
+        current.visits.filter((visit) => visit.case_id === caseId).map((visit) => visit.id)
+      );
+      const freshVisitIds = new Set(visitIds);
+      const affectedVisitIds = new Set([...currentCaseVisitIds, ...freshVisitIds]);
+
+      const nextCases = current.cases.map((entry) =>
+        entry.id === caseId ? caseResult.data || entry : entry
+      );
+      if (!nextCases.some((entry) => entry.id === caseId) && caseResult.data) {
+        nextCases.push(caseResult.data);
+      }
+
+      return {
+        ...current,
+        cases: nextCases,
+        planSteps: [
+          ...current.planSteps.filter((step) => step.case_id !== caseId),
+          ...(planStepsResult.data || [])
+        ].sort(comparePlanStepsByTimeline),
+        visits: [
+          ...current.visits.filter((visit) => visit.case_id !== caseId),
+          ...(visitsResult.data || [])
+        ].sort((left, right) => compareVisitsByTimeline(right, left)),
+        visitProcedures: [
+          ...current.visitProcedures.filter((procedure) => !affectedVisitIds.has(procedure.visit_id)),
+          ...(proceduresResult.data || [])
+        ],
+        visitPhotos: [
+          ...current.visitPhotos.filter((photo) => photo.case_id !== caseId),
+          ...(photosResult.data || [])
+        ].sort((left, right) => {
+          return (
+            String(right.created_at || "").localeCompare(String(left.created_at || "")) ||
+            String(right.id || "").localeCompare(String(left.id || ""))
+          );
+        }),
+        caseImplants: [
+          ...current.caseImplants.filter((implant) => implant.case_id !== caseId),
+          ...(implantsResult.data || [])
+        ]
+      };
+    });
+    setLastSyncedAt(new Date().toISOString());
+  }
+
+  function getPhotoDisplayUrl(photo) {
+    if (!photo) {
+      return "";
+    }
+
+    return photo.preview_url || photo.signed_url || photoUrlCache[getPhotoCacheKey(photo)] || "";
+  }
+
+  async function ensurePhotoDisplayUrls(photos) {
+    if (!supabase || !session?.user || !photos?.length) {
+      return;
+    }
+
+    const missingPhotos = photos.filter((photo) => {
+      if (!photo || photo.preview_url || !photo.storage_path || !photo.bucket_name) {
+        return false;
+      }
+
+      const cacheKey = getPhotoCacheKey(photo);
+      return cacheKey && !photoUrlCache[cacheKey];
+    });
+
+    if (!missingPhotos.length) {
+      return;
+    }
+
+    const uniquePhotos = Array.from(
+      new Map(missingPhotos.map((photo) => [getPhotoCacheKey(photo), photo])).values()
+    );
+
+    const signedEntries = await Promise.all(
+      uniquePhotos.map(async (photo) => {
+        const cacheKey = getPhotoCacheKey(photo);
+        if (!cacheKey) {
+          return null;
+        }
+
+        const existingRequest = photoUrlRequestRef.current.get(cacheKey);
+        if (existingRequest) {
+          return existingRequest;
+        }
+
+        const request = supabase.storage
+          .from(photo.bucket_name)
+          .createSignedUrl(photo.storage_path, 3600)
+          .then(({ data, error }) => {
+            if (error || !data?.signedUrl) {
+              return null;
+            }
+            return [cacheKey, data.signedUrl];
+          })
+          .finally(() => {
+            photoUrlRequestRef.current.delete(cacheKey);
+          });
+
+        photoUrlRequestRef.current.set(cacheKey, request);
+        return request;
+      })
+    );
+
+    const nextCacheEntries = Object.fromEntries(signedEntries.filter(Boolean));
+    if (Object.keys(nextCacheEntries).length) {
+      setPhotoUrlCache((current) => ({ ...current, ...nextCacheEntries }));
+    }
+  }
+
   useEffect(() => {
     if (session?.user) {
       loadAppData();
@@ -582,6 +829,8 @@ export default function App() {
       setRecords(INITIAL_RECORDS);
       setSelectedPatientId("");
       setSelectedCaseId("");
+      setPhotoUrlCache({});
+      photoUrlRequestRef.current.clear();
     }
   }, [session?.user?.id]);
 
@@ -788,6 +1037,8 @@ export default function App() {
         return "pill--amber";
       case "remove_membrane":
         return "pill--sand";
+      case "remove_implant":
+        return "pill--rose";
       case "iip":
       case "implant_placement":
         return "pill--green";
@@ -1129,6 +1380,10 @@ export default function App() {
   const showNoDataHint = Boolean(
     authReady && session?.user && !loadingData && !records.patients.length
   );
+  const selectedCasePhotoIdsKey = selectedCasePhotos.map((photo) => photo.id).join("|");
+  const existingVisitPhotoIdsKey = visitModal.values.existing_photos
+    .map((photo) => photo.id)
+    .join("|");
   const activeDraftPhoto =
     draftPhotoEditor.kind === "existing"
       ? visitModal.values.existing_photos[draftPhotoEditor.index]
@@ -1155,6 +1410,38 @@ export default function App() {
       };
     });
   }, [selectedCaseId, selectedCasePhotos]);
+
+  useEffect(() => {
+    if (!selectedCasePhotos.length) {
+      return;
+    }
+
+    ensurePhotoDisplayUrls(selectedCasePhotos);
+  }, [selectedCasePhotoIdsKey, session?.user?.id]);
+
+  useEffect(() => {
+    if (!visitModal.open || !visitModal.values.existing_photos.length) {
+      return;
+    }
+
+    ensurePhotoDisplayUrls(visitModal.values.existing_photos);
+  }, [visitModal.open, existingVisitPhotoIdsKey, session?.user?.id]);
+
+  useEffect(() => {
+    if (!photoPreview.open || !previewPhoto) {
+      return;
+    }
+
+    ensurePhotoDisplayUrls([previewPhoto]);
+  }, [photoPreview.open, photoPreview.photoId, session?.user?.id]);
+
+  useEffect(() => {
+    if (!draftPhotoEditor.open || !activeDraftPhoto) {
+      return;
+    }
+
+    ensurePhotoDisplayUrls([activeDraftPhoto]);
+  }, [draftPhotoEditor.open, draftPhotoEditor.kind, draftPhotoEditor.index, session?.user?.id]);
 
   function openPatientModal(mode, patient = null) {
     setPatientModal({
@@ -1465,6 +1752,7 @@ export default function App() {
 
   function closeVisitModal() {
     revokeDraftPhotoUrls(visitModal.values);
+    setPhotoPrepLabel("");
     setDraftPhotoEditor({
       open: false,
       kind: "existing",
@@ -1483,6 +1771,30 @@ export default function App() {
         )
       }
     }));
+  }
+
+  function syncVisitProcedureSelection(nextValues) {
+    setVisitModal((current) => {
+      const selectedTypes = normalizeProcedureTypeSelection(nextValues);
+      const existingProceduresByType = new Map();
+
+      current.values.procedures.forEach((procedure) => {
+        if (procedure.procedure_type && !existingProceduresByType.has(procedure.procedure_type)) {
+          existingProceduresByType.set(procedure.procedure_type, procedure);
+        }
+      });
+
+      return {
+        ...current,
+        values: {
+          ...current.values,
+          procedures: selectedTypes.map(
+            (procedureType) =>
+              existingProceduresByType.get(procedureType) || createEmptyProcedure(procedureType)
+          )
+        }
+      };
+    });
   }
 
   function openDraftPhotoEditor(kind, index) {
@@ -1879,27 +2191,41 @@ export default function App() {
     }
   }
 
-  function pushNewPhotoDrafts(fileList) {
+  async function pushNewPhotoDrafts(fileList) {
     if (!fileList?.length) {
       return;
     }
 
-    const nextDrafts = Array.from(fileList || []).map((file) => ({
-      local_id: createClientId(),
-      file,
-      caption: "",
-      photo_label: "",
-      taken_at: "",
-      preview_url: URL.createObjectURL(file)
-    }));
+    const files = Array.from(fileList || []);
+    setPhotoPrepLabel(`處理照片中 0/${files.length}`);
 
-    setVisitModal((current) => ({
-      ...current,
-      values: {
-        ...current.values,
-        new_photos: current.values.new_photos.concat(nextDrafts)
+    try {
+      const nextDrafts = [];
+
+      for (const [index, file] of files.entries()) {
+        const preparedFile = await compressImageFile(file);
+        nextDrafts.push({
+          local_id: createClientId(),
+          file: preparedFile,
+          file_name: file.name,
+          caption: "",
+          photo_label: "",
+          taken_at: "",
+          preview_url: URL.createObjectURL(preparedFile)
+        });
+        setPhotoPrepLabel(`處理照片中 ${index + 1}/${files.length}`);
       }
-    }));
+
+      setVisitModal((current) => ({
+        ...current,
+        values: {
+          ...current.values,
+          new_photos: current.values.new_photos.concat(nextDrafts)
+        }
+      }));
+    } finally {
+      setPhotoPrepLabel("");
+    }
   }
 
   async function uploadVisitPhotos(visitId, caseId, patientId, drafts, onProgress) {
@@ -1916,9 +2242,10 @@ export default function App() {
 
     const results = await Promise.allSettled(
       drafts.map(async (draft, index) => {
+        const uploadFileName = draft.file_name || draft.file.name;
         const extension = draft.file.name.split(".").pop() || "jpg";
         const safeName = slugifyFileName(
-          `${createClientId()}-${draft.file.name.replace(/\.[^.]+$/, "")}.${extension}`
+          `${createClientId()}-${uploadFileName.replace(/\.[^.]+$/, "")}.${extension}`
         );
         const storagePath = `${session.user.id}/${patientId}/${caseId}/${visitId}/${safeName}`;
 
@@ -1939,7 +2266,7 @@ export default function App() {
             visit_id: visitId,
             case_id: caseId,
             storage_path: storagePath,
-            file_name: draft.file.name,
+            file_name: uploadFileName,
             mime_type: draft.file.type,
             caption: normalizeText(draft.caption),
             photo_label: normalizeText(draft.photo_label),
@@ -2059,7 +2386,7 @@ export default function App() {
         .filter((procedure) => procedure.procedure_type)
         .map((procedure, index) => {
           const toothImplants =
-            isImplantProcedureType(procedure.procedure_type)
+            hasHealingConfigurator(procedure.procedure_type)
               ? deriveToothImplants(procedure, visitCaseToothCodes).map((item) => ({
                   tooth_code: item.tooth_code,
                   implant_brand: normalizeText(item.implant_brand),
@@ -2111,7 +2438,7 @@ export default function App() {
               healing_size:
                 primaryToothImplant?.healing_size ||
                 normalizeHealingSize(procedure.extra_data?.healing_size),
-              ...(isImplantProcedureType(procedure.procedure_type)
+              ...(hasHealingConfigurator(procedure.procedure_type)
                 ? { tooth_implants: toothImplants }
                 : {})
             }
@@ -2160,7 +2487,7 @@ export default function App() {
       }
 
       closeVisitModal();
-      await loadAppData();
+      await refreshCaseData(visitDraft.case_id);
 
       let backgroundError = "";
       let uploadedPhotoCount = 0;
@@ -2297,7 +2624,7 @@ export default function App() {
           : `照片同步失敗：${photoError.message}`;
       }
 
-      await loadAppData();
+      await refreshCaseData(visitDraft.case_id);
       if (backgroundError) {
         setErrorMessage(`回診已儲存，但仍有部分同步未完成：${backgroundError}`);
       } else if (uploadedPhotoCount) {
@@ -2395,7 +2722,12 @@ export default function App() {
       if (error) {
         throw error;
       }
-      await loadAppData();
+      setPhotoUrlCache((current) => {
+        const nextCache = { ...current };
+        delete nextCache[getPhotoCacheKey(photo)];
+        return nextCache;
+      });
+      await refreshCaseData(photo.case_id);
     } catch (error) {
       setErrorMessage(error.message);
     } finally {
@@ -3236,92 +3568,96 @@ export default function App() {
                                   </div>
                                 </div>
                                 <div className="photo-grid">
-                                  {group.photos.map((photo) => (
-                                    <article
-                                      className={cx(
-                                        "photo-card",
-                                        casePhotoCompare.selectedIds.includes(photo.id) &&
-                                          "photo-card--selected"
-                                      )}
-                                      key={photo.id}
-                                      role="button"
-                                      tabIndex={0}
-                                      aria-pressed={casePhotoCompare.selectedIds.includes(photo.id)}
-                                      onClick={() => toggleCaseComparePhoto(photo.id)}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter" || event.key === " ") {
-                                          event.preventDefault();
-                                          toggleCaseComparePhoto(photo.id);
-                                        }
-                                      }}
-                                    >
-                                      {photo.signed_url ? (
-                                        <div className="photo-preview-trigger">
-                                          <img src={photo.signed_url} alt={photo.file_name} />
-                                        </div>
-                                      ) : (
-                                        <div className="photo-placeholder">No preview</div>
-                                      )}
-                                      <div className="photo-card__body">
-                                        <div className="photo-card__meta">
-                                          <strong>
-                                            {visitsById[photo.visit_id]?.visited_on
-                                              ? formatDate(visitsById[photo.visit_id].visited_on)
-                                              : "未指定日期"}
-                                          </strong>
-                                          <div className="chip-row">
-                                            {(proceduresByVisitId[photo.visit_id] || []).map((procedure) => (
-                                              <span
-                                                className={cx(
-                                                  "pill",
-                                                  getProcedureToneClass(procedure.procedure_type)
-                                                )}
-                                                key={procedure.id}
-                                              >
-                                                {PROCEDURE_LABELS[procedure.procedure_type]}
-                                              </span>
-                                            ))}
+                                  {group.photos.map((photo) => {
+                                    const photoDisplayUrl = getPhotoDisplayUrl(photo);
+
+                                    return (
+                                      <article
+                                        className={cx(
+                                          "photo-card",
+                                          casePhotoCompare.selectedIds.includes(photo.id) &&
+                                            "photo-card--selected"
+                                        )}
+                                        key={photo.id}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-pressed={casePhotoCompare.selectedIds.includes(photo.id)}
+                                        onClick={() => toggleCaseComparePhoto(photo.id)}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter" || event.key === " ") {
+                                            event.preventDefault();
+                                            toggleCaseComparePhoto(photo.id);
+                                          }
+                                        }}
+                                      >
+                                        {photoDisplayUrl ? (
+                                          <div className="photo-preview-trigger">
+                                            <img src={photoDisplayUrl} alt={photo.file_name} />
+                                          </div>
+                                        ) : (
+                                          <div className="photo-placeholder">No preview</div>
+                                        )}
+                                        <div className="photo-card__body">
+                                          <div className="photo-card__meta">
+                                            <strong>
+                                              {visitsById[photo.visit_id]?.visited_on
+                                                ? formatDate(visitsById[photo.visit_id].visited_on)
+                                                : "未指定日期"}
+                                            </strong>
+                                            <div className="chip-row">
+                                              {(proceduresByVisitId[photo.visit_id] || []).map((procedure) => (
+                                                <span
+                                                  className={cx(
+                                                    "pill",
+                                                    getProcedureToneClass(procedure.procedure_type)
+                                                  )}
+                                                  key={procedure.id}
+                                                >
+                                                  {PROCEDURE_LABELS[procedure.procedure_type]}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <div className="photo-card__actions">
+                                            <span
+                                              className={cx(
+                                                "photo-selection-chip",
+                                                casePhotoCompare.selectedIds.includes(photo.id) &&
+                                                  "photo-selection-chip--selected"
+                                              )}
+                                            >
+                                              {casePhotoCompare.selectedIds.includes(photo.id)
+                                                ? "已選取比較"
+                                                : "點卡片選取"}
+                                            </span>
+                                            <button
+                                              className="photo-action-button"
+                                              type="button"
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                setPhotoPreview({
+                                                  open: true,
+                                                  photoId: photo.id
+                                                });
+                                              }}
+                                            >
+                                              查看大圖
+                                            </button>
+                                            <button
+                                              className="photo-action-button photo-action-button--delete"
+                                              type="button"
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                handleDeletePhoto(photo);
+                                              }}
+                                            >
+                                              刪除
+                                            </button>
                                           </div>
                                         </div>
-                                        <div className="photo-card__actions">
-                                          <span
-                                            className={cx(
-                                              "photo-selection-chip",
-                                              casePhotoCompare.selectedIds.includes(photo.id) &&
-                                                "photo-selection-chip--selected"
-                                            )}
-                                          >
-                                            {casePhotoCompare.selectedIds.includes(photo.id)
-                                              ? "已選取比較"
-                                              : "點卡片選取"}
-                                          </span>
-                                          <button
-                                            className="photo-action-button"
-                                            type="button"
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              setPhotoPreview({
-                                                open: true,
-                                                photoId: photo.id
-                                              });
-                                            }}
-                                          >
-                                            查看大圖
-                                          </button>
-                                          <button
-                                            className="photo-action-button photo-action-button--delete"
-                                            type="button"
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              handleDeletePhoto(photo);
-                                            }}
-                                          >
-                                            刪除
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </article>
-                                  ))}
+                                      </article>
+                                    );
+                                  })}
                                 </div>
                               </section>
                             ))}
@@ -4188,24 +4524,25 @@ export default function App() {
           <div className="field field--full">
             <div className="section-title-row">
               <span>治療內容紀錄</span>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() =>
-                  setVisitModal((current) => ({
-                    ...current,
-                    values: {
-                      ...current.values,
-                      procedures: current.values.procedures.concat(createEmptyProcedure())
-                    }
-                  }))
-                }
-              >
-                新增治療內容
-              </button>
+            </div>
+
+            <div className="field field--full">
+              <span>治療內容</span>
+              <PillSelect
+                value={visitModal.values.procedures
+                  .map((procedure) => procedure.procedure_type)
+                  .filter(Boolean)}
+                options={PROCEDURE_OPTIONS}
+                multiple
+                onChange={syncVisitProcedureSelection}
+                getToneClass={getProcedureToneClass}
+              />
             </div>
 
             <div className="procedure-stack">
+              {!visitModal.values.procedures.length ? (
+                <div className="empty-state">請先選擇至少一個治療內容。</div>
+              ) : null}
               {visitModal.values.procedures.map((procedure, index) => {
                 const procedureCaseToothCodes = getCaseToothCodes(
                   casesById[visitModal.values.case_id]
@@ -4224,21 +4561,19 @@ export default function App() {
                 return (
                   <article className="procedure-card" key={procedure.id || index}>
                   <div className="section-title-row">
-                    <strong>治療內容 #{index + 1}</strong>
-                    {visitModal.values.procedures.length > 1 ? (
+                    <strong>
+                      {PROCEDURE_LABELS[procedure.procedure_type] || `治療內容 #${index + 1}`}
+                    </strong>
+                    {visitModal.values.procedures.length > 0 ? (
                       <button
                         className="danger-button danger-button--ghost"
                         type="button"
                         onClick={() =>
-                          setVisitModal((current) => ({
-                            ...current,
-                            values: {
-                              ...current.values,
-                              procedures: current.values.procedures.filter(
-                                (_entry, innerIndex) => innerIndex !== index
-                              )
-                            }
-                          }))
+                          syncVisitProcedureSelection(
+                            visitModal.values.procedures
+                              .map((item) => item.procedure_type)
+                              .filter((procedureType) => procedureType !== procedure.procedure_type)
+                          )
                         }
                       >
                         刪除治療內容
@@ -4247,31 +4582,6 @@ export default function App() {
                   </div>
 
                   <div className="toolbar-grid">
-                    <div className="field field--full">
-                      <span>治療內容</span>
-                      <PillSelect
-                        value={procedure.procedure_type}
-                        options={PROCEDURE_OPTIONS}
-                        onChange={(nextValue) =>
-                          setVisitModal((current) => ({
-                            ...current,
-                            values: {
-                              ...current.values,
-                              procedures: current.values.procedures.map((item, innerIndex) =>
-                                innerIndex === index
-                                  ? {
-                                      ...item,
-                                      procedure_type: nextValue
-                                    }
-                                  : item
-                              )
-                            }
-                          }))
-                        }
-                        getToneClass={getProcedureToneClass}
-                      />
-                    </div>
-
                     <label className="field">
                       <span>備註</span>
                       <input
@@ -4297,7 +4607,7 @@ export default function App() {
                     </label>
                   </div>
 
-                  {isImplantProcedureType(procedure.procedure_type) ? (
+                  {hasHealingConfigurator(procedure.procedure_type) ? (
                     <div className="implant-configurator">
                       {toothImplants.length ? (
                         <div className="implant-tooth-grid field--full">
@@ -4305,6 +4615,7 @@ export default function App() {
                             const toothModelOptions =
                               IMPLANT_MODEL_OPTIONS_BY_BRAND[toothImplant.implant_brand || ""] || [];
                             const toothHealingSelection = toothImplant.healing_used ? "yes" : "no";
+                            const isImplantConfig = isImplantProcedureType(procedure.procedure_type);
 
                             return (
                               <section className="implant-tooth-card" key={toothImplant.tooth_code}>
@@ -4312,77 +4623,81 @@ export default function App() {
                                   <strong>牙位 {toothImplant.tooth_code}</strong>
                                 </div>
 
-                                <div className="field field--full">
-                                  <span>植體廠牌</span>
-                                  <PillSelect
-                                    value={toothImplant.implant_brand || ""}
-                                    options={IMPLANT_BRAND_OPTIONS}
-                                    onChange={(nextValue) => {
-                                      const nextModelOptions =
-                                        IMPLANT_MODEL_OPTIONS_BY_BRAND[nextValue] || [];
-                                      const nextModel =
-                                        nextModelOptions.find(
-                                          (option) => option.value === toothImplant.implant_model
-                                        )?.value || "";
+                                {isImplantConfig ? (
+                                  <>
+                                    <div className="field field--full">
+                                      <span>植體廠牌</span>
+                                      <PillSelect
+                                        value={toothImplant.implant_brand || ""}
+                                        options={IMPLANT_BRAND_OPTIONS}
+                                        onChange={(nextValue) => {
+                                          const nextModelOptions =
+                                            IMPLANT_MODEL_OPTIONS_BY_BRAND[nextValue] || [];
+                                          const nextModel =
+                                            nextModelOptions.find(
+                                              (option) => option.value === toothImplant.implant_model
+                                            )?.value || "";
 
-                                      updateToothImplant(toothImplant.tooth_code, {
-                                        implant_brand: nextValue,
-                                        implant_model: nextModel
-                                      });
-                                    }}
-                                    getToneClass={getImplantBrandToneClass}
-                                  />
-                                </div>
-
-                                <div className="field field--full">
-                                  <span>植體型號</span>
-                                  {toothModelOptions.length ? (
-                                    <PillSelect
-                                      value={toothImplant.implant_model || ""}
-                                      options={toothModelOptions}
-                                      onChange={(nextValue) =>
-                                        updateToothImplant(toothImplant.tooth_code, {
-                                          implant_model: nextValue
-                                        })
-                                      }
-                                      getToneClass={() =>
-                                        getImplantBrandToneClass(toothImplant.implant_brand)
-                                      }
-                                    />
-                                  ) : (
-                                    <div className="implant-configurator__hint">
-                                      先選植體廠牌，再選對應型號。
+                                          updateToothImplant(toothImplant.tooth_code, {
+                                            implant_brand: nextValue,
+                                            implant_model: nextModel
+                                          });
+                                        }}
+                                        getToneClass={getImplantBrandToneClass}
+                                      />
                                     </div>
-                                  )}
-                                </div>
 
-                                <div className="field field--full">
-                                  <span>直徑 (mm)</span>
-                                  <PillSelect
-                                    value={String(toothImplant.implant_diameter_mm || "")}
-                                    options={IMPLANT_DIAMETER_OPTIONS}
-                                    onChange={(nextValue) =>
-                                      updateToothImplant(toothImplant.tooth_code, {
-                                        implant_diameter_mm: nextValue
-                                      })
-                                    }
-                                    getToneClass={() => "pill--mist"}
-                                  />
-                                </div>
+                                    <div className="field field--full">
+                                      <span>植體型號</span>
+                                      {toothModelOptions.length ? (
+                                        <PillSelect
+                                          value={toothImplant.implant_model || ""}
+                                          options={toothModelOptions}
+                                          onChange={(nextValue) =>
+                                            updateToothImplant(toothImplant.tooth_code, {
+                                              implant_model: nextValue
+                                            })
+                                          }
+                                          getToneClass={() =>
+                                            getImplantBrandToneClass(toothImplant.implant_brand)
+                                          }
+                                        />
+                                      ) : (
+                                        <div className="implant-configurator__hint">
+                                          先選植體廠牌，再選對應型號。
+                                        </div>
+                                      )}
+                                    </div>
 
-                                <div className="field field--full">
-                                  <span>長度 (mm)</span>
-                                  <PillSelect
-                                    value={String(toothImplant.implant_length_mm || "")}
-                                    options={IMPLANT_LENGTH_OPTIONS}
-                                    onChange={(nextValue) =>
-                                      updateToothImplant(toothImplant.tooth_code, {
-                                        implant_length_mm: nextValue
-                                      })
-                                    }
-                                    getToneClass={() => "pill--sand"}
-                                  />
-                                </div>
+                                    <div className="field field--full">
+                                      <span>直徑 (mm)</span>
+                                      <PillSelect
+                                        value={String(toothImplant.implant_diameter_mm || "")}
+                                        options={IMPLANT_DIAMETER_OPTIONS}
+                                        onChange={(nextValue) =>
+                                          updateToothImplant(toothImplant.tooth_code, {
+                                            implant_diameter_mm: nextValue
+                                          })
+                                        }
+                                        getToneClass={() => "pill--mist"}
+                                      />
+                                    </div>
+
+                                    <div className="field field--full">
+                                      <span>長度 (mm)</span>
+                                      <PillSelect
+                                        value={String(toothImplant.implant_length_mm || "")}
+                                        options={IMPLANT_LENGTH_OPTIONS}
+                                        onChange={(nextValue) =>
+                                          updateToothImplant(toothImplant.tooth_code, {
+                                            implant_length_mm: nextValue
+                                          })
+                                        }
+                                        getToneClass={() => "pill--sand"}
+                                      />
+                                    </div>
+                                  </>
+                                ) : null}
 
                                 <div className="field field--full">
                                   <span>使用 Healing</span>
@@ -4579,12 +4894,14 @@ export default function App() {
                   capture="environment"
                   multiple
                   onChange={(event) => {
-                    pushNewPhotoDrafts(event.target.files);
+                    void pushNewPhotoDrafts(event.target.files);
                     event.target.value = "";
                   }}
                 />
               </label>
             </div>
+
+            {photoPrepLabel ? <div className="upload-feedback">{photoPrepLabel}</div> : null}
 
             {visitModal.values.new_photos.length ? (
               <div className="upload-feedback">
@@ -4599,13 +4916,13 @@ export default function App() {
                     key={photo.id}
                     className={cx("photo-draft-card", photo.marked_for_delete && "is-dim")}
                   >
-                    {photo.signed_url ? (
+                    {getPhotoDisplayUrl(photo) ? (
                       <button
                         className="photo-draft-trigger"
                         type="button"
                         onClick={() => openDraftPhotoEditor("existing", index)}
                       >
-                        <img src={photo.signed_url} alt={photo.file_name} />
+                        <img src={getPhotoDisplayUrl(photo)} alt={photo.file_name} />
                       </button>
                     ) : null}
                     <div className="photo-draft-card__summary">
@@ -4648,7 +4965,7 @@ export default function App() {
                       type="button"
                       onClick={() => openDraftPhotoEditor("new", index)}
                     >
-                      <img src={photo.preview_url} alt={photo.file.name} />
+                      <img src={photo.preview_url} alt={photo.file_name || photo.file.name} />
                     </button>
                     <div className="photo-draft-card__summary">
                       <div className="chip-row">
@@ -4765,7 +5082,11 @@ export default function App() {
             <button className="secondary-button" type="button" onClick={closeVisitModal}>
               取消
             </button>
-            <button className="primary-button" type="submit">
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={!visitModal.values.procedures.length || Boolean(busyLabel)}
+            >
               儲存回診
             </button>
           </div>
@@ -4790,15 +5111,20 @@ export default function App() {
               {selectedComparePhotos.map((photo) => {
                 const visit = visitsById[photo.visit_id];
                 const procedures = visit ? proceduresByVisitId[visit.id] || [] : [];
+                const photoDisplayUrl = getPhotoDisplayUrl(photo);
 
                 return (
                   <article className="compare-view__panel compare-view__panel--multi" key={photo.id}>
                     <div className="compare-view__image-frame">
-                      <img
-                        className="compare-view__image"
-                        src={photo.signed_url}
-                        alt={photoTitle(photo)}
-                      />
+                      {photoDisplayUrl ? (
+                        <img
+                          className="compare-view__image"
+                          src={photoDisplayUrl}
+                          alt={photoTitle(photo)}
+                        />
+                      ) : (
+                        <div className="photo-placeholder">No preview</div>
+                      )}
                     </div>
                     <div className="compare-view__panel-meta">
                       <strong>{visit?.visited_on ? formatDate(visit.visited_on) : "未指定日期"}</strong>
@@ -4833,11 +5159,15 @@ export default function App() {
         {activeDraftPhoto ? (
           <div className="photo-lightbox">
             <div className="photo-lightbox__frame">
-              <img
-                className="photo-lightbox__image"
-                src={activeDraftPhoto.signed_url || activeDraftPhoto.preview_url}
-                alt={activeDraftPhoto.file_name || activeDraftPhoto.file?.name || "Clinical Photo"}
-              />
+              {getPhotoDisplayUrl(activeDraftPhoto) ? (
+                <img
+                  className="photo-lightbox__image"
+                  src={getPhotoDisplayUrl(activeDraftPhoto)}
+                  alt={activeDraftPhoto.file_name || activeDraftPhoto.file?.name || "Clinical Photo"}
+                />
+              ) : (
+                <div className="photo-placeholder">No preview</div>
+              )}
             </div>
             <div className="field field--full">
               <span>快速標籤</span>
@@ -4904,10 +5234,14 @@ export default function App() {
         }
         width="xwide"
       >
-        {previewPhoto?.signed_url ? (
+        {getPhotoDisplayUrl(previewPhoto) ? (
           <div className="photo-lightbox">
             <div className="photo-lightbox__frame">
-              <img className="photo-lightbox__image" src={previewPhoto.signed_url} alt={photoTitle(previewPhoto)} />
+              <img
+                className="photo-lightbox__image"
+                src={getPhotoDisplayUrl(previewPhoto)}
+                alt={photoTitle(previewPhoto)}
+              />
             </div>
             <div className="photo-lightbox__meta">
               <strong>{previewPhotoVisit?.visited_on ? formatDate(previewPhotoVisit.visited_on) : "未指定回診"}</strong>
