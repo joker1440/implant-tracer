@@ -3147,16 +3147,16 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="detail-grid">
-                      <div className="detail-card">
+                    <div className="detail-grid detail-grid--compact">
+                      <div className="detail-card detail-card--compact">
                         <span className="detail-label">診所</span>
                         <strong>{selectedPatient.clinic_name || "未設定"}</strong>
                       </div>
-                      <div className="detail-card">
+                      <div className="detail-card detail-card--compact">
                         <span className="detail-label">性別</span>
                         <strong>{GENDER_LABELS[selectedPatient.gender] || "未設定"}</strong>
                       </div>
-                      <div className="detail-card">
+                      <div className="detail-card detail-card--compact">
                         <span className="detail-label">生日</span>
                         <strong>
                           {selectedPatient.birth_date
@@ -3164,7 +3164,7 @@ export default function App() {
                             : "未設定"}
                         </strong>
                       </div>
-                      <div className="detail-card">
+                      <div className="detail-card detail-card--compact">
                         <span className="detail-label">年齡</span>
                         <strong>
                           {selectedPatient.birth_date

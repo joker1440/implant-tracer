@@ -1010,6 +1010,11 @@ img {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.detail-grid--compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .detail-card,
 .note-block,
 .alert-banner,
@@ -1037,6 +1042,24 @@ img {
 .visit-card,
 .timeline-item {
   gap: 6px;
+}
+
+.detail-card--compact {
+  padding: 12px 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 0;
+}
+
+.detail-card--compact .detail-label {
+  white-space: nowrap;
+  margin: 0;
+}
+
+.detail-card--compact strong {
+  font-size: 1rem;
+  line-height: 1.2;
 }
 
 .alert-banner {
@@ -2327,6 +2350,10 @@ img {
   .compare-view__grid,
   .compare-view__meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-grid--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .visit-photo-group__header,
