@@ -27,6 +27,13 @@ export const CLINIC_OPTIONS = [
   { value: "大心", label: "大心" }
 ];
 
+export const GENDER_OPTIONS = [
+  { value: "", label: "未設定" },
+  { value: "male", label: "男" },
+  { value: "female", label: "女" },
+  { value: "other", label: "其他" }
+];
+
 export const PROCEDURE_OPTIONS = [
   { value: "consultation", label: "Consultation" },
   { value: "extraction", label: "Extraction" },
@@ -170,6 +177,10 @@ export const CASE_STATUS_LABELS = Object.fromEntries(
 
 export const PLAN_STATUS_LABELS = Object.fromEntries(
   PLAN_STATUS_OPTIONS.map((option) => [option.value, option.label])
+);
+
+export const GENDER_LABELS = Object.fromEntries(
+  GENDER_OPTIONS.map((option) => [option.value, option.label])
 );
 
 export const TOOTH_ROWS = [

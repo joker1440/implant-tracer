@@ -62,6 +62,7 @@ export function createEmptyPatient() {
   return {
     full_name: "",
     clinic_name: "",
+    gender: "",
     birth_date: "",
     attention_alert: "",
     general_notes: ""

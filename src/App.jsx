@@ -8,6 +8,8 @@ import {
   BONE_GRAFT_OPTIONS,
   CASE_STATUS_LABELS,
   CASE_STATUS_OPTIONS,
+  GENDER_LABELS,
+  GENDER_OPTIONS,
   HEALING_SIZE_OPTIONS,
   HEALING_TOGGLE_OPTIONS,
   IMPLANT_BRAND_OPTIONS,
@@ -934,8 +936,16 @@ export default function App() {
       return true;
     }
 
+    const searchableBirthDate = patient.birth_date
+      ? [patient.birth_date, patient.birth_date.replace(/-/g, "/")]
+      : [];
+    const searchableGender = patient.gender ? GENDER_LABELS[patient.gender] || patient.gender : "";
+
     return (
       patient.full_name.toLowerCase().includes(deferredPatientQueryText) ||
+      (patient.clinic_name || "").toLowerCase().includes(deferredPatientQueryText) ||
+      searchableBirthDate.some((value) => value.toLowerCase().includes(deferredPatientQueryText)) ||
+      searchableGender.toLowerCase().includes(deferredPatientQueryText) ||
       (patient.attention_alert || "").toLowerCase().includes(deferredPatientQueryText)
     );
   });
@@ -1453,6 +1463,7 @@ export default function App() {
         ? {
             full_name: patient.full_name || "",
             clinic_name: patient.clinic_name || "",
+            gender: patient.gender || "",
             birth_date: patient.birth_date || "",
             attention_alert: patient.attention_alert || "",
             general_notes: patient.general_notes || ""
@@ -1600,6 +1611,7 @@ export default function App() {
               </div>
               <div className="patient-item__meta">
                 <span>
+                  {patient.gender ? `${GENDER_LABELS[patient.gender] || patient.gender} · ` : ""}
                   {patient.birth_date
                     ? `${calculateAge(patient.birth_date) ?? "-"} 歲`
                     : "未設定生日"}
@@ -1930,6 +1942,7 @@ export default function App() {
       owner_user_id: session.user.id,
       full_name: patientModal.values.full_name.trim(),
       clinic_name: patientModal.values.clinic_name || null,
+      gender: patientModal.values.gender || null,
       birth_date: patientModal.values.birth_date || null,
       attention_alert: normalizeText(patientModal.values.attention_alert),
       general_notes: normalizeText(patientModal.values.general_notes)
@@ -3087,7 +3100,7 @@ export default function App() {
                 <input
                   value={patientQuery}
                   onChange={(event) => setPatientQuery(event.target.value)}
-                  placeholder="姓名 / 生日 / 注意事項"
+                  placeholder="姓名 / 診所 / 性別 / 生日 / 注意事項"
                 />
               </label>
               {renderPatientList()}
@@ -3138,6 +3151,10 @@ export default function App() {
                       <div className="detail-card">
                         <span className="detail-label">診所</span>
                         <strong>{selectedPatient.clinic_name || "未設定"}</strong>
+                      </div>
+                      <div className="detail-card">
+                        <span className="detail-label">性別</span>
+                        <strong>{GENDER_LABELS[selectedPatient.gender] || "未設定"}</strong>
                       </div>
                       <div className="detail-card">
                         <span className="detail-label">生日</span>
@@ -3919,6 +3936,8 @@ export default function App() {
           <label className="field">
             <span>生日</span>
             <DateInput
+              calendar="roc"
+              placeholder="YYY/MM/DD"
               value={patientModal.values.birth_date}
               onChange={(nextValue) =>
                 setPatientModal((current) => ({
@@ -3933,6 +3952,19 @@ export default function App() {
               </p>
             ) : null}
           </label>
+          <div className="field">
+            <span>性別</span>
+            <PillSelect
+              value={patientModal.values.gender}
+              options={GENDER_OPTIONS}
+              onChange={(nextValue) =>
+                setPatientModal((current) => ({
+                  ...current,
+                  values: { ...current.values, gender: nextValue }
+                }))
+              }
+            />
+          </div>
           <div className="field field--full">
             <span>診所</span>
             <div className="clinic-builder">
@@ -4046,7 +4078,7 @@ export default function App() {
               <input
                 value={patientQuery}
                 onChange={(event) => setPatientQuery(event.target.value)}
-                placeholder="姓名 / 生日 / 注意事項"
+                placeholder="姓名 / 診所 / 性別 / 生日 / 注意事項"
               />
             </label>
             {renderPatientList(() => setPatientSheetOpen(false))}

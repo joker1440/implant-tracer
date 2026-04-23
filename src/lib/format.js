@@ -65,6 +65,41 @@ export function formatDateDraftInput(value) {
   return `${digitsOnly.slice(0, 4)}/${digitsOnly.slice(4, 6)}/${digitsOnly.slice(6)}`;
 }
 
+function toRocYear(gregorianYear) {
+  return Number(gregorianYear) - 1911;
+}
+
+function toGregorianYear(rocYear) {
+  return Number(rocYear) + 1911;
+}
+
+export function displayRocDateInput(value) {
+  if (!value) {
+    return "";
+  }
+
+  const [year, month, day] = String(value).split("-");
+  return `${toRocYear(year)}/${month}/${day}`;
+}
+
+export function formatRocDateDraftInput(value) {
+  const digitsOnly = String(value || "").replace(/\D/g, "").slice(0, 7);
+
+  if (!digitsOnly) {
+    return "";
+  }
+
+  if (digitsOnly.length <= 3) {
+    return digitsOnly;
+  }
+
+  if (digitsOnly.length <= 5) {
+    return `${digitsOnly.slice(0, 3)}/${digitsOnly.slice(3)}`;
+  }
+
+  return `${digitsOnly.slice(0, 3)}/${digitsOnly.slice(3, 5)}/${digitsOnly.slice(5)}`;
+}
+
 export function parseDateInput(value) {
   const normalized = String(value || "")
     .trim()
@@ -84,6 +119,28 @@ export function parseDateInput(value) {
   const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   return isValidIsoDateParts(year, month, day) ? iso : null;
+}
+
+export function parseRocDateInput(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/[.]/g, "/")
+    .replace(/-/g, "/");
+
+  if (!normalized) {
+    return "";
+  }
+
+  const match = normalized.match(/^(\d{1,3})\/(\d{1,2})\/(\d{1,2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const [, rocYear, month, day] = match;
+  const gregorianYear = String(toGregorianYear(rocYear));
+  const iso = `${gregorianYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+  return isValidIsoDateParts(gregorianYear, month, day) ? iso : null;
 }
 
 export function formatDate(value) {

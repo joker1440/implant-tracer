@@ -2,26 +2,37 @@ import { useEffect, useState } from "react";
 import {
   cx,
   displayDateInput,
+  displayRocDateInput,
   formatDateDraftInput,
-  parseDateInput
+  formatRocDateDraftInput,
+  parseDateInput,
+  parseRocDateInput
 } from "../lib/format";
 
 export default function DateInput({
   value,
   onChange,
-  placeholder = "YYYY/MM/DD",
+  placeholder,
   shortcuts = [],
   className = "",
-  required = false
+  required = false,
+  calendar = "gregorian"
 }) {
-  const [draft, setDraft] = useState(displayDateInput(value));
+  const useRocCalendar = calendar === "roc";
+  const displayValue = useRocCalendar ? displayRocDateInput : displayDateInput;
+  const formatDraftValue = useRocCalendar ? formatRocDateDraftInput : formatDateDraftInput;
+  const parseValue = useRocCalendar ? parseRocDateInput : parseDateInput;
+  const resolvedPlaceholder = placeholder || (calendar === "roc" ? "YYY/MM/DD" : "YYYY/MM/DD");
+  const maxLength = calendar === "roc" ? 9 : 10;
+
+  const [draft, setDraft] = useState(displayValue(value));
 
   useEffect(() => {
-    setDraft(displayDateInput(value));
-  }, [value]);
+    setDraft(displayValue(value));
+  }, [useRocCalendar, value]);
 
   function commit(nextDraft) {
-    const parsed = parseDateInput(nextDraft);
+    const parsed = parseValue(nextDraft);
 
     if (parsed === "") {
       setDraft("");
@@ -30,23 +41,23 @@ export default function DateInput({
     }
 
     if (parsed) {
-      setDraft(displayDateInput(parsed));
+      setDraft(displayValue(parsed));
       onChange(parsed);
       return;
     }
 
-    setDraft(displayDateInput(value));
+    setDraft(displayValue(value));
   }
 
   return (
     <div className={cx("date-entry", className)}>
       <input
         value={draft}
-        placeholder={placeholder}
+        placeholder={resolvedPlaceholder}
         required={required}
         inputMode="numeric"
-        maxLength={10}
-        onChange={(event) => setDraft(formatDateDraftInput(event.target.value))}
+        maxLength={maxLength}
+        onChange={(event) => setDraft(formatDraftValue(event.target.value))}
         onBlur={(event) => commit(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
@@ -63,7 +74,7 @@ export default function DateInput({
               className="shortcut-pill"
               type="button"
               onClick={() => {
-                setDraft(displayDateInput(shortcut.value));
+                setDraft(displayValue(shortcut.value));
                 onChange(shortcut.value);
               }}
             >
